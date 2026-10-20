@@ -27,9 +27,9 @@ npm run dev
 
 ## 第一次使用
 
-1. 打开“模型与设置”，填写服务地址和模型名称，点击“保存配置”。Base URL 应为 API 根路径，例如 `https://api.openai.com/v1`；程序会追加 `/chat/completions`。服务必须原生支持图像输入和 JSON 文本输出。默认只展示必要连接信息，其他选项收在“高级设置”中。
+1. 打开“模型与设置”，选择 DeepSeek、Kimi、GLM、OpenAI、Claude 或 Gemini，应用会自动填入当前视觉模型、地址和协议，然后点击“保存配置”。也可选“自定义”编辑地址和模型，并在高级设置选择协议。无需手动研究厂商的认证头和参数差异。
 2. 复制 API Key，点击“粘贴 API Key”。**主进程直接读取系统剪贴板**，密钥不经过 React。也可通过“从文件导入 API Key”的原生选择器读取仅一行的 UTF-8 `.txt` 或 `.key` 文件。导入文件和剪贴板由用户管理，请妥善保护。操作系统加密不可用时只保留内存会话。
-3. 点击“测试连接”。测试会发送一个很小的 PNG 探针，验证凭证、协议和图像请求被接受；**不证明模型正确理解课程截图**。某些服务不支持 `response_format`，可在高级设置中关闭 JSON 模式，但输出仍必须通过本地严格校验。请求不发送 `temperature`；输出上限使用 `max_tokens`。
+3. 点击“测试连接”。测试会发送一个很小的 PNG 探针，验证凭证、协议和图像请求被接受；**不证明模型正确理解课程截图**。请求不发送 `temperature`，不强制关闭厂商的思考模式。预设自动使用适合该服务的输出预算字段；自定义服务可在高级设置调整，输出始终必须通过本地严格校验。
 4. 打开学习浏览器，手动登录学习通、完成平台验证，进入课程、视频或章节练习。浏览器独立于日常浏览器，登录会话在后续运行中尽可能复用，失效时需要重新登录。
 5. 新建任务，填写名称、入口 URL 和具体目标，例如“阅读当前章节练习，分析可见题目并给出答案建议与解析”。
 6. 核对当前课程后开始。**任务 URL 是打开浏览器的入口；浏览器已打开时，“从当前页面开始”会辅助当前页面，不自动跳回入口。** 所选任务的名称和目标应与当前课程对应。
@@ -42,13 +42,26 @@ npm run dev
 
 ## 模型配置与凭据
 
-默认兼容 OpenAI 风格 Chat Completions 的 `image_url` 数据 URL。参考 [OpenAI 图像输入文档](https://developers.openai.com/api/docs/guides/images-vision?api-mode=chat)。默认模型名只是可编辑的起点，实际可用模型取决于服务商与账户权限。
+内置六家原生视觉模型预设，核验日期为 **2026-10-20**。新安装默认使用 OpenAI `gpt-6.1-sol`。支持实际的 Chat Completions、OpenAI Responses 与 Anthropic Messages 协议，各自使用对应的图像格式、认证头和响应解析。
+
+| 厂商 | 默认模型 | 协议 |
+| --- | --- | --- |
+| DeepSeek | `deepseek-flash` | Chat Completions |
+| Kimi | `kimi-k3` | Chat Completions |
+| GLM | `glm-5.3-flash` | Chat Completions |
+| OpenAI | `gpt-6.1-sol` | Responses |
+| Claude | `claude-sonnet-5-5` | Anthropic Messages |
+| Gemini | `gemini-3.8-flash` | 官方 OpenAI 兼容接口 |
+
+模型名称仍可编辑，实际可用性取决于账户权限。地址、参数差异和官方来源见 [模型预设说明](docs/MODEL_PRESETS.md)。切换厂商并保存时会清除原连接的密钥，再粘贴新厂商的 Key；当前版本保存一份当前连接，不会将旧厂商密钥发送到新厂商。
 
 开发时可复制 `.env.example` 为 `.env`，仅由主进程读取：
 
 ```dotenv
 MODEL_BASE_URL=https://api.openai.com/v1
-MODEL_NAME=gpt-4.1-mini
+MODEL_NAME=gpt-6.1-sol
+MODEL_PROVIDER=openai
+MODEL_PROTOCOL=responses
 MODEL_API_KEY=
 ```
 
@@ -73,6 +86,7 @@ Study-Agent/
 │   │   └── agent/harness.ts         # 串行状态机、预算、确认、恢复、结果验证
 │   ├── preload/index.ts            # contextBridge 的固定方法白名单
 │   ├── shared/contracts.ts         # 共享类型、Zod 决策与 IPC 输入结构
+│   ├── shared/providers.ts         # 六家视觉预设与官方文档/核验日期
 │   └── renderer/
 │       ├── index.html              # CSP
 │       └── src/                    # React 工作台、任务、分析、日志、设置
@@ -108,7 +122,7 @@ Study-Agent/
 | 任务操作/观察轮数 | 30 |
 | 模型决策次数 | 12（单次至多 3 个 HTTP 尝试，总计至多 36 次） |
 | 墙钟运行时间 | 2 小时，包含暂停和等待确认 |
-| 模型整体超时 | 60 秒，包含重试，可设 5–180 秒 |
+| 模型整体超时 | 新安装 90 秒，包含重试，可设 5–180 秒；已有用户配置保留 |
 | 视频采样 | 2 秒；连续 15 秒不推进请求接管 |
 | 确认截图有效期 | 30 秒，页面改变立即失效 |
 | 连续无进展 | 两次即接管 |

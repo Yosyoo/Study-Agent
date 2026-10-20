@@ -49,7 +49,12 @@ export interface BrowserPort {
 }
 export interface ModelInput { goal: string; observation: Observation; history: string[]; signal: AbortSignal }
 export interface ModelProvider { decide(input: ModelInput): Promise<ModelDecision> }
+export const providerIdSchema = z.enum(['custom', 'deepseek', 'kimi', 'glm', 'openai', 'claude', 'gemini'])
+export const modelProtocolSchema = z.enum(['chat_completions', 'responses', 'anthropic'])
 export const modelConfigSchema = z.object({
+  provider: providerIdSchema.default('custom'),
+  protocol: modelProtocolSchema.default('chat_completions'),
+  tokenParameter: z.enum(['max_tokens', 'max_completion_tokens']).default('max_tokens'),
   baseUrl: z.string().url().max(2048), model: z.string().min(1).max(200),
   maxTokens: z.number().int().min(256).max(16000),
   timeoutMs: z.number().int().min(5000).max(180000), jsonMode: z.boolean(),
@@ -102,6 +107,7 @@ export const initialAgent: AgentSnapshot = {
   message: '准备就绪，打开浏览器并手动登录后开始任务。', observation: null, decision: null, pending: null, videos: [],
 }
 export const defaultModelConfig: ModelConfig = {
-  baseUrl: 'https://api.openai.com/v1', model: 'gpt-4.1-mini',
-  maxTokens: 4000, timeoutMs: 60000, jsonMode: true,
+  provider: 'openai', protocol: 'responses', tokenParameter: 'max_completion_tokens',
+  baseUrl: 'https://api.openai.com/v1', model: 'gpt-6.1-sol',
+  maxTokens: 8000, timeoutMs: 90000, jsonMode: true,
 }

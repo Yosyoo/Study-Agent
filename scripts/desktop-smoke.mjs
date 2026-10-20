@@ -38,6 +38,8 @@ try {
   assert.equal(boundary.node, 'undefined')
   assert.equal(boundary.rawIPC, 'undefined')
   assert.equal(boundary.state.model.hasKey, false)
+  assert.equal(boundary.state.model.model, 'gpt-6.1-sol')
+  assert.equal(boundary.state.model.protocol, 'responses')
   assert.equal('apiKey' in boundary.state.model, false)
   assert.equal(boundary.state.tasks.length, 0)
   await page.screenshot({ path: resolve(root, '.local/desktop-dashboard.png'), fullPage: true })
@@ -61,6 +63,34 @@ try {
   assert.equal(rejected, true)
   await page.getByRole('button', { name: '模型与设置', exact: true }).click()
   await page.getByRole('heading', { name: '模型与设置', exact: true }).waitFor()
+  const presets = [
+    ['DeepSeek', 'deepseek', 'deepseek-flash', 'https://api.deepseek.com', 'chat_completions', 'max_tokens'],
+    ['Kimi', 'kimi', 'kimi-k3', 'https://api.moonshot.ai/v1', 'chat_completions', 'max_completion_tokens'],
+    ['GLM', 'glm', 'glm-5.3-flash', 'https://open.bigmodel.cn/api/paas/v4', 'chat_completions', 'max_tokens'],
+    ['OpenAI', 'openai', 'gpt-6.1-sol', 'https://api.openai.com/v1', 'responses', 'max_completion_tokens'],
+    ['Claude', 'claude', 'claude-sonnet-5-5', 'https://api.anthropic.com/v1', 'anthropic', 'max_tokens'],
+    ['Gemini', 'gemini', 'gemini-3.8-flash', 'https://generativelanguage.googleapis.com/v1beta/openai', 'chat_completions', 'max_tokens'],
+  ]
+  for (const [label, provider, model, baseUrl, protocol, tokenParameter] of presets) {
+    const before = (await page.evaluate(() => window.study.getState())).model
+    const button = page.getByRole('button', { name: label, exact: true })
+    await button.click()
+    assert.equal(await button.getAttribute('aria-pressed'), 'true')
+    assert.equal(await page.getByLabel('API Base URL', { exact: false }).inputValue(), baseUrl)
+    assert.equal(await page.getByLabel('Model Name', { exact: false }).inputValue(), model)
+    assert.equal((await page.evaluate(() => window.study.getState())).model.model, before.model, 'Draft selection must not change the saved connection')
+    await page.getByRole('button', { name: '保存配置', exact: true }).click()
+    await page.locator('.busy-indicator').waitFor({ state: 'hidden' })
+    const savedPreset = (await page.evaluate(() => window.study.getState())).model
+    assert.equal(savedPreset.provider, provider)
+    assert.equal(savedPreset.model, model)
+    assert.equal(savedPreset.protocol, protocol)
+    assert.equal(savedPreset.tokenParameter, tokenParameter)
+  }
+  await page.getByRole('button', { name: 'OpenAI', exact: true }).click()
+  await page.getByRole('button', { name: '保存配置', exact: true }).click()
+  await page.locator('.busy-indicator').waitFor({ state: 'hidden' })
+  await page.screenshot({ path: resolve(root, '.local/desktop-provider-presets.png'), fullPage: true })
   await page.getByLabel('Model Name', { exact: false }).fill('vision-model-test')
   await page.getByRole('button', { name: '保存配置', exact: true }).click()
   await eventually(async () => (await page.evaluate(() => window.study.getState())).model.model === 'vision-model-test', 'Model configuration was not saved through the UI')

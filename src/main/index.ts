@@ -9,10 +9,10 @@ import { z } from 'zod'
 import { AgentHarness } from './agent/harness'
 import { BrowserController } from './browser/controller'
 import { urlAllowed } from './browser/policy'
-import { OpenAICompatibleProvider } from './model/provider'
+import { MultimodalProvider } from './model/provider'
 import { isTrustedRendererUrl, redact, validateApiKey } from './security'
 import { SecretStore, StateStore, type SavedState } from './store'
-import { initialAgent, modelConfigSchema, taskInputSchema, type AgentSnapshot, type AppState, type ModelConfig, type StudyTask } from '../shared/contracts'
+import { initialAgent, modelConfigSchema, taskInputSchema, type AgentSnapshot, type AppState, type StudyTask } from '../shared/contracts'
 
 const directory = dirname(fileURLToPath(import.meta.url))
 let window: BrowserWindow | null = null
@@ -104,7 +104,7 @@ async function exclusive<T>(operation: () => Promise<T>): Promise<T> {
   try { return await operation() } finally { busy = false }
 }
 function assertInactive(): void { if (active()) throw new Error('请先停止当前 Agent 任务，再修改浏览器入口或模型配置。') }
-function provider(): OpenAICompatibleProvider { return new OpenAICompatibleProvider(saved.model, secrets.key) }
+function provider(): MultimodalProvider { return new MultimodalProvider(saved.model, secrets.key) }
 const idSchema = z.string().uuid()
 
 async function packagedBrowserExecutable(): Promise<string | undefined> {
@@ -177,8 +177,8 @@ function registerIPC(): void {
     assertInactive()
     const config = modelConfigSchema.parse(raw)
     // Constructor validates URL security policy without issuing a network request.
-    new OpenAICompatibleProvider(config, '')
-    const changedEndpoint = config.baseUrl !== saved.model.baseUrl
+    new MultimodalProvider(config, '')
+    const changedEndpoint = config.baseUrl !== saved.model.baseUrl || config.provider !== saved.model.provider
     if (changedEndpoint && secrets.key) {
       await secrets.clear()
       log('warn', 'API 地址已更改，原有密钥已清除。请为新服务重新导入，避免误发密钥。')
@@ -254,12 +254,15 @@ app.whenReady().then(async () => {
   store = new StateStore(app.getPath('userData'))
   const loaded = await store.load(); saved = loaded.state
   // Environment overrides stay main-process only, never copied into Vite variables.
-  const envModel: ModelConfig = { ...saved.model,
+  const envModel = { ...saved.model,
     ...(process.env.MODEL_BASE_URL ? { baseUrl: process.env.MODEL_BASE_URL } : {}),
     ...(process.env.MODEL_NAME ? { model: process.env.MODEL_NAME } : {}),
+    ...(process.env.MODEL_PROVIDER ? { provider: process.env.MODEL_PROVIDER } : {}),
+    ...(process.env.MODEL_PROTOCOL ? { protocol: process.env.MODEL_PROTOCOL } : {}),
+    ...(process.env.MODEL_TOKEN_PARAMETER ? { tokenParameter: process.env.MODEL_TOKEN_PARAMETER } : {}),
   }
   const parsedConfig = modelConfigSchema.safeParse(envModel)
-  const changedEnvironmentEndpoint = parsedConfig.success && parsedConfig.data.baseUrl !== saved.model.baseUrl
+  const changedEnvironmentEndpoint = parsedConfig.success && (parsedConfig.data.baseUrl !== saved.model.baseUrl || parsedConfig.data.provider !== saved.model.provider)
   if (parsedConfig.success) saved.model = parsedConfig.data
   secrets = new SecretStore(store.directory, safeStorage)
   try {

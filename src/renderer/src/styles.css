@@ -2025,6 +2025,46 @@ h1 {
 .connection-body {
   padding: 25px 27px 0;
 }
+.provider-picker {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 7px;
+}
+.provider-choice {
+  padding: 10px 7px;
+  border: 1px solid #e2e9ed;
+  border-radius: 7px;
+  background: #fbfcfd;
+  color: #6b8190;
+  font-size: 12px;
+  line-height: 1.4;
+  transition:
+    background 0.15s,
+    border-color 0.15s,
+    color 0.15s;
+}
+.provider-choice:hover:not(:disabled) {
+  color: #3c8573;
+  border-color: #b8d7cd;
+  background: #f6faf8;
+}
+.provider-choice.selected {
+  color: #24745f;
+  border-color: #81b8a5;
+  background: #edf7f1;
+  box-shadow: inset 0 0 0 1px #81b8a51c;
+  font-weight: 600;
+}
+.provider-choice.custom:not(.selected) {
+  border-style: dashed;
+  background: transparent;
+}
+.provider-description {
+  margin: 11px 1px 24px;
+  color: #879ba5;
+  font-size: 11px;
+  line-height: 1.7;
+}
 .connection-fields {
   display: grid;
   grid-template-columns: 1.25fr 1fr;
@@ -2126,6 +2166,21 @@ h1 {
   gap: 17px;
   padding: 2px 0 22px;
 }
+.connection-advanced-fields select {
+  width: 100%;
+  height: 37px;
+  padding: 8px 10px;
+  border: 1px solid #dee7eb;
+  border-radius: 5px;
+  background: #fdfefe;
+  color: #405c6d;
+  font-size: 12px;
+}
+.connection-advanced-fields select:focus {
+  outline: none;
+  border-color: #90bcb0;
+  box-shadow: 0 0 0 2px #e4f1ea;
+}
 .connection-json-toggle {
   grid-column: 1 / -1;
   display: flex;
@@ -2194,6 +2249,9 @@ h1 {
   border-radius: 4px;
 }
 @media (max-width: 960px) {
+  .provider-picker {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
   .connection-overview,
   .connection-actions {
     padding-left: 21px;

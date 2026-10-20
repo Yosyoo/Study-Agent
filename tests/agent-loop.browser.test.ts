@@ -61,7 +61,7 @@ async function fixture(delayed = false) {
   const browser = new BrowserController(join(directory, 'profile'), { headless: true, allowedOrigins: [origin] })
   cleanup.push(() => browser.close())
   const execute = vi.spyOn(browser, 'execute')
-  const provider = new OpenAICompatibleProvider({ ...defaultModelConfig, baseUrl: `${origin}/v1`, model: 'scripted-test-model' }, 'fixture-only-key', { maxRetries: 0 })
+  const provider = new OpenAICompatibleProvider({ ...defaultModelConfig, provider: 'custom', protocol: 'chat_completions', tokenParameter: 'max_tokens', baseUrl: `${origin}/v1`, model: 'scripted-test-model' }, 'fixture-only-key', { maxRetries: 0 })
   const harness = new AgentHarness({ browser, provider, onUpdate: () => {}, log: () => {} })
   cleanup.push(() => harness.dispose())
   const task: StudyTask = { id: randomUUID(), name: '本地闭环集成测试', url: `${origin}/course`, goal: '打开章节练习并给出答案建议，等待我核对', status: 'pending', createdAt: Date.now(), updatedAt: Date.now(), lastMessage: '' }

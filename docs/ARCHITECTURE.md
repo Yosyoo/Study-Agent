@@ -34,11 +34,13 @@ flowchart TD
 - **preload**：只暴露 `StudyAPI`；不暴露 `ipcRenderer.send/invoke` 的任意通道调用，也不把 IPC Event 传给页面。
 - **main/index**：验证 IPC sender、主 frame 与本地 renderer URL；校验输入；组装服务；协调手动操作与 Agent；维护任务及日志。
 - **BrowserController**：串行浏览器操作、合法平台边界、持久会话、iframe、截图、内部布局指纹、视频原始采样、敏感操作拒绝。
-- **ModelProvider**：构造多模态请求、总超时、有限重试、响应大小限制、结构校验。模型结果只是数据。
+- **ModelProvider**：构造多模态请求、总超时、有限重试、响应大小限制、结构校验。实际适配 Chat Completions 的 image_url、Responses 的 input_image 和 Anthropic Messages 的 image/source；只解析最终文本，不把 reasoning/thinking 当作决策，不执行服务端提出的未授权工具调用。模型结果只是数据。
 - **AgentHarness**：执行循环、最小上下文、预算、确认状态、结果验证、人工接管。可用 fake port 测试，不依赖 Electron。
 - **StateStore / SecretStore**：有序原子 JSON 与 OS 加密密钥。重启不会自动恢复执行中的动作。
 
 `BrowserPort`、`ModelProvider` 是实际需要的两条依赖边界。适配新的模型协议可实现 `ModelProvider`；适配新的学习平台优先在浏览器页面识别和 URL 策略处增加有证据的规则，不需要增加插件框架或新服务器。
+
+`shared/providers.ts` 集中维护六家厂商的当前视觉模型、Base URL、协议和输出参数，附官方来源与核验日期。选择预设只修改草稿，保存后才更新实际连接；密钥仍只存在主进程。历史缺少协议的自定义配置按 Chat Completions 解析，旧出厂官方模型配置才迁移至新的 OpenAI Responses 默认，用户自行选择的模型不被替换。
 
 ## 模型输入与上下文
 

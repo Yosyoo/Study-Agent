@@ -52,6 +52,7 @@ import {
   type StudyTask,
   type VideoState,
 } from "../../shared/contracts";
+import { applyProviderPreset, providerPresets } from "../../shared/providers";
 
 type View = "dashboard" | "tasks" | "analysis" | "activity" | "settings";
 const phaseLabels: Record<AgentPhase, string> = {
@@ -1434,6 +1435,9 @@ function ModelSettings({
   ) => Promise<void>;
 }) {
   const savedConfig = (): ModelConfig => ({
+    provider: state.model.provider,
+    protocol: state.model.protocol,
+    tokenParameter: state.model.tokenParameter,
     baseUrl: state.model.baseUrl,
     model: state.model.model,
     maxTokens: state.model.maxTokens,
@@ -1447,8 +1451,30 @@ function ModelSettings({
   }, [state.model, dirty]);
   const set = <K extends keyof ModelConfig>(key: K, value: ModelConfig[K]) => {
     setDirty(true);
-    setConfig((previous) => ({ ...previous, [key]: value }));
+    setConfig((previous) => ({
+      ...previous,
+      [key]: value,
+      ...(key === "baseUrl" ? { provider: "custom" as const } : {}),
+    }));
   };
+  const selectedPreset = providerPresets.find(
+    (preset) => preset.id === config.provider,
+  );
+  const currentPreset = providerPresets.find(
+    (preset) => preset.id === state.model.provider,
+  );
+  const keyConfigured =
+    state.model.hasKey &&
+    config.baseUrl === state.model.baseUrl &&
+    config.provider === state.model.provider;
+  function chooseProvider(id: ModelConfig["provider"]) {
+    setDirty(true);
+    setConfig((previous) =>
+      id === "custom"
+        ? { ...previous, provider: "custom" }
+        : applyProviderPreset(previous, id),
+    );
+  }
   const api = window.study;
   const host = (() => {
     try {
@@ -1483,7 +1509,7 @@ function ModelSettings({
             <Bot size={24} />
           </div>
           <div className="connection-current">
-            <span>当前模型</span>
+            <span>{currentPreset?.label ?? "自定义服务"} · 当前模型</span>
             <h2>{state.model.model}</h2>
             <p>{host}</p>
           </div>
@@ -1492,6 +1518,37 @@ function ModelSettings({
           </Badge>
         </div>
         <div className="connection-body">
+          <div
+            className="provider-picker"
+            role="group"
+            aria-label="选择模型厂商"
+          >
+            {providerPresets.map((preset) => (
+              <button
+                key={preset.id}
+                type="button"
+                className={`provider-choice ${config.provider === preset.id ? "selected" : ""}`}
+                aria-pressed={config.provider === preset.id}
+                disabled={blocked}
+                onClick={() => chooseProvider(preset.id)}
+              >
+                {preset.label}
+              </button>
+            ))}
+            <button
+              type="button"
+              className={`provider-choice custom ${config.provider === "custom" ? "selected" : ""}`}
+              aria-pressed={config.provider === "custom"}
+              disabled={blocked}
+              onClick={() => chooseProvider("custom")}
+            >
+              自定义
+            </button>
+          </div>
+          <p className="provider-description">
+            {selectedPreset?.description ??
+              "填写服务地址和支持图片输入的模型名称。"}
+          </p>
           <div className="connection-fields">
             <label className="field">
               服务地址 <span className="field-label-english">API Base URL</span>
@@ -1517,14 +1574,16 @@ function ModelSettings({
             <KeyRound size={17} />
             <div className="connection-key-copy">
               <strong>
-                API Key <span>{state.model.hasKey ? "已配置" : "未配置"}</span>
+                API Key <span>{keyConfigured ? "已配置" : "未配置"}</span>
               </strong>
               <p>
-                {state.model.keyStorage === "encrypted"
-                  ? "已在本机加密保存"
-                  : state.model.keyStorage === "session"
-                    ? "仅当前会话有效"
-                    : "复制密钥后点击粘贴，应用会安全保存"}
+                {!keyConfigured
+                  ? "复制该厂商的密钥后点击粘贴"
+                  : state.model.keyStorage === "encrypted"
+                    ? "已在本机加密保存"
+                    : state.model.keyStorage === "session"
+                      ? "仅当前会话有效"
+                      : "复制密钥后点击粘贴，应用会安全保存"}
               </p>
             </div>
             <div className="connection-key-actions">
@@ -1534,7 +1593,7 @@ function ModelSettings({
                 disabled={blocked}
                 onClick={() => configureKey("clipboard")}
               >
-                {state.model.hasKey ? "更换 API Key" : "粘贴 API Key"}
+                {keyConfigured ? "更换 API Key" : "粘贴 API Key"}
               </button>
               <button
                 className="text-button"
@@ -1544,7 +1603,7 @@ function ModelSettings({
               >
                 从文件导入
               </button>
-              {state.model.hasKey && (
+              {keyConfigured && (
                 <IconButton
                   label="移除密钥"
                   disabled={blocked}
@@ -1562,6 +1621,41 @@ function ModelSettings({
               <ChevronDown size={13} />
             </summary>
             <div className="connection-advanced-fields">
+              {config.provider === "custom" && (
+                <label className="field">
+                  API 协议
+                  <select
+                    value={config.protocol}
+                    onChange={(e) =>
+                      set("protocol", e.target.value as ModelConfig["protocol"])
+                    }
+                  >
+                    <option value="chat_completions">Chat Completions</option>
+                    <option value="responses">OpenAI Responses</option>
+                    <option value="anthropic">Anthropic Messages</option>
+                  </select>
+                </label>
+              )}
+              {config.provider === "custom" &&
+                config.protocol === "chat_completions" && (
+                  <label className="field">
+                    输出上限参数
+                    <select
+                      value={config.tokenParameter}
+                      onChange={(e) =>
+                        set(
+                          "tokenParameter",
+                          e.target.value as ModelConfig["tokenParameter"],
+                        )
+                      }
+                    >
+                      <option value="max_tokens">max_tokens</option>
+                      <option value="max_completion_tokens">
+                        max_completion_tokens
+                      </option>
+                    </select>
+                  </label>
+                )}
               <label className="field">
                 最大输出 Token
                 <input
@@ -1587,14 +1681,16 @@ function ModelSettings({
                   }
                 />
               </label>
-              <label className="connection-json-toggle">
-                <input
-                  type="checkbox"
-                  checked={config.jsonMode}
-                  onChange={(e) => set("jsonMode", e.target.checked)}
-                />
-                <span>JSON 输出模式</span>
-              </label>
+              {config.protocol !== "anthropic" && (
+                <label className="connection-json-toggle">
+                  <input
+                    type="checkbox"
+                    checked={config.jsonMode}
+                    onChange={(e) => set("jsonMode", e.target.checked)}
+                  />
+                  <span>JSON 输出模式</span>
+                </label>
+              )}
             </div>
           </details>
         </div>

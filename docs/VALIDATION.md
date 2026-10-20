@@ -7,10 +7,10 @@
 | 检查 | 结果 | 证据范围 |
 | --- | --- | --- |
 | `npm run typecheck` | 通过 | main/preload/renderer/shared/tests 的严格 TypeScript 检查 |
-| `npm test` | 5 个文件，62 项通过 | Provider、Harness、视频、URL/坐标、持久化/密钥/脱敏与旧配置迁移 |
+| `npm test` | 6 个文件，91 项通过 | 三协议 Provider、六家预设、Harness、视频、URL/坐标、持久化/密钥/脱敏与旧配置迁移 |
 | `npm run test:browser` | 2 个文件，16 项通过 | 真实 headless Chromium，本地 HTTP fixture 与脚本模型响应 |
 | `npm run build` | 通过 | Electron main、sandboxed preload CJS、React/Tailwind renderer |
-| `npm run test:desktop` | 通过 | 真实开发版 Electron，任务增删、非法 URL、设置实际保存、无 renderer 异常 |
+| `npm run test:desktop` | 通过 | 真实开发版 Electron，六家预设逐家填入/保存、任务增删、非法 URL、设置实际保存、无 renderer 异常 |
 | `npm run package` | 通过 | 原生 darwin/arm64 `.app`，包含 Chromium |
 | 指定 `STUDY_AGENT_SMOKE_EXECUTABLE` 的桌面测试 | 通过 | 打包后的 `Study Agent.app`，独立临时 profile |
 | 打包资源中的 Chromium | 通过 | 独立启动、创建页面、真实按钮点击，未依赖开发浏览器缓存 |
@@ -21,6 +21,8 @@
 模型闭环集成测试覆盖：真实 Chromium 截图通过 `image_url` 发给本地 HTTP 服务；脚本响应提出导航点击；确认前没有操作，确认后实际导航并重新截图；随后进入题目建议核对；核对不提交。可见与隐藏的题目 DOM canary 都没有作为文本发送。延迟 HTTP 期间暂停/停止不会触发点击。**脚本响应不具备视觉推理能力，这些测试只验证工程闭环。**
 
 模型单元测试覆盖非法 JSON/结构/坐标、输出大小、截断、非 JSON 响应、凭证错误不重试、429/5xx 有限重试、重定向禁止、超时/取消、错误脱敏和图像探针。Harness 测试覆盖低置信度、确认重复点击、暂停失效、完成状态不被退出覆盖、无进展、重复建议与预算。
+
+六家视觉预设已对照 2026-10-20 官方文档核对；三种协议通过模拟 HTTP 测试验证原生图像格式、认证头、token 字段、最终文本解析与拒绝未授权工具结果。原生厂商付费端点尚未使用真实 Key 逐家调用，不能把协议回归测试视为账户可用性或模型效果验收。四类磁盘迁移测试保留任务、用户预算和密钥密文字节，只更新旧出厂官方默认。
 
 ## 学习通与真实模型验收
 
@@ -56,6 +58,6 @@
 
 1. 完成用户协助的真实学习通/模型验收，校准页面与任务点规则并添加脱敏回归 fixture。
 2. 在 Windows x64 和 Intel Mac 上执行同样的检查与安装验收。
-3. 增加服务商能力配置（例如切换 token 参数或 Responses 协议），改善不兼容端点的诊断；当前请求已不再发送温度参数。
+3. 在已有三协议和六家预设基础上补充真实厂商端点验收，持续更新预设核验日期，改善不兼容端点的诊断。
 4. 在有稳定真实样本后添加课程导入与明确的任务点数据模型，保留人工监督边界。
 5. 完成图标、签名、公证、安装器与更新机制后再做正式分发。

@@ -28,6 +28,13 @@ export class StateStore {
       if (raw?.version === 1 && raw.model && typeof raw.model === 'object' && 'temperature' in raw.model) {
         delete raw.model.temperature
       }
+      // Upgrade only our previously shipped untouched official model choice.
+      // User-selected models and third-party endpoints keep their existing values.
+      if (raw?.version === 1 && raw.model?.model === 'gpt-4.1-mini'
+        && raw.model.baseUrl.replace(/\/+$/, '') === 'https://api.openai.com/v1' && !raw.model.provider) {
+        raw.model = { ...raw.model, provider: defaultModelConfig.provider, protocol: defaultModelConfig.protocol,
+          tokenParameter: defaultModelConfig.tokenParameter, model: defaultModelConfig.model }
+      }
       const state = savedStateSchema.parse(raw)
       for (const task of state.tasks) {
         if (['running', 'paused', 'needs_user'].includes(task.status)) {
