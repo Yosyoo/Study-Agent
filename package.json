@@ -1,0 +1,86 @@
+{
+  "name": "study-agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A supervised multimodal browser companion for online learning",
+  "author": "Study Agent contributors",
+  "license": "MIT",
+  "type": "module",
+  "main": "./out/main/index.js",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "dev": "electron-vite dev",
+    "preview": "electron-vite preview",
+    "typecheck": "tsc --noEmit",
+    "build": "npm run typecheck && electron-vite build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:browser": "vitest run --config vitest.browser.config.ts",
+    "test:desktop": "node scripts/desktop-smoke.mjs",
+    "check": "npm run typecheck && npm test && npm run build",
+    "browser:install": "playwright install chromium",
+    "package": "npm run build && node scripts/package.mjs --dir",
+    "dist:mac": "npm run build && node scripts/package.mjs --mac",
+    "dist:win": "npm run build && node scripts/package.mjs --win"
+  },
+  "dependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "dotenv": "^17.2.3",
+    "lucide-react": "^0.468.0",
+    "playwright": "^1.64.1",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "tailwindcss": "^4.3.3",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^6.0.0",
+    "electron": "^44.9.1",
+    "electron-builder": "^26.15.3",
+    "electron-vite": "^6.0.0",
+    "typescript": "^5.9.3",
+    "vite": "^8.3.4",
+    "vitest": "^5.0.5"
+  },
+  "build": {
+    "appId": "app.studyagent.desktop",
+    "productName": "Study Agent",
+    "directories": {
+      "output": "release"
+    },
+    "asar": true,
+    "files": [
+      "out/**",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "node_modules/playwright*/**"
+    ],
+    "extraResources": [
+      { "from": ".local/browser-runtime", "to": "browser-runtime" }
+    ],
+    "mac": {
+      "category": "public.app-category.education",
+      "target": ["dmg"]
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}
