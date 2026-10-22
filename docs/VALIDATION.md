@@ -71,3 +71,11 @@
 5. 完成签名、公证、安装器与更新机制后再做正式分发；本轮已提供应用图标。
 
 本轮问题、复现条件、修复位置与剩余限制见 [REVIEW-2026-10-22.md](REVIEW-2026-10-22.md)。
+
+## 2026-10-23 安装包准备
+
+- `npm run dist:mac` 通过，生成 `release/Study Agent-0.1.0-arm64.dmg`（323,725,253 字节）。
+- `hdiutil verify` 完整性检查通过；只读挂载后确认应用可执行文件、内置 Chromium 清单和 Applications 快捷方式存在，检查后已卸载挂载卷。此项不是新机器上的安装验收。
+- 已生成 `release/SHA256SUMS.txt`；安装包保持 Git 忽略，作为 Release 附件分发，不纳入源码仓库。
+- 新增三平台构建及 Release 草稿工作流，YAML 解析通过；尚未在 GitHub 执行。运行器依据 GitHub 官方说明选择 macos-15（arm64）、macos-15-intel（x64）与 windows-latest（x64）：https://docs.github.com/en/actions/reference/runners/github-hosted-runners 。
+- Windows 和 Intel Mac 安装包尚未生成；正式签名、公证、其他机器安装测试仍待完成。

@@ -1,0 +1,77 @@
+name: Build release installers
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+jobs:
+  installers:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            arch: arm64
+            command: dist:mac
+          - os: macos-15-intel
+            arch: x64
+            command: dist:mac
+          - os: windows-latest
+            arch: x64
+            command: dist:win
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Verify native architecture
+        env:
+          EXPECTED_ARCH: ${{ matrix.arch }}
+        run: node -e "if(process.arch !== process.env.EXPECTED_ARCH) process.exit(1)"
+      - run: npm ci
+      - run: npm run browser:install
+      - run: npm run check
+      - run: npm run test:browser
+      - run: npm run test:desktop
+      - run: npm run ${{ matrix.command }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installers-${{ matrix.os }}-${{ matrix.arch }}
+          path: |
+            release/*.dmg
+            release/*.exe
+          if-no-files-found: error
+          compression-level: 0
+  draft-release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: installers
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: installers-*
+          merge-multiple: true
+          path: release
+      - name: Prepare draft with installers and checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node -e 'if(process.env.RELEASE_TAG !== "v"+require("./package.json").version) throw new Error("Tag must match package version")'
+          cd release
+          sha256sum -- *.dmg *.exe > SHA256SUMS.txt
+          if gh release view "$RELEASE_TAG" > /dev/null 2>&1; then
+            test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = true
+          else
+            gh release create "$RELEASE_TAG" --verify-tag --draft --title "Study Agent $RELEASE_TAG" --notes-file ../docs/RELEASE-NOTES.md
+          fi
+          gh release upload "$RELEASE_TAG" --clobber -- *.dmg *.exe SHA256SUMS.txt
