@@ -17,9 +17,7 @@ import {
   ExternalLink,
   Eye,
   FileQuestion,
-  FolderOpen,
   GraduationCap,
-  KeyRound,
   LayoutDashboard,
   LoaderCircle,
   Monitor,
@@ -37,7 +35,6 @@ import {
   X,
   AlertCircle,
   AlertTriangle,
-  ChevronDown,
   type LucideIcon,
 } from "lucide-react";
 import {
@@ -46,13 +43,12 @@ import {
   type AppState,
   type AgentPhase,
   type BrowserAction,
-  type ModelConfig,
   type Observation,
   type QuestionAnalysis,
   type StudyTask,
   type VideoState,
 } from "../../shared/contracts";
-import { applyProviderPreset, providerPresets } from "../../shared/providers";
+import { ModelSettings } from "./ModelSettings";
 
 type View = "dashboard" | "tasks" | "analysis" | "activity" | "settings";
 const phaseLabels: Record<AgentPhase, string> = {
@@ -100,6 +96,7 @@ const fallback: AppState = {
   logs: [],
   model: { ...defaultModelConfig, hasKey: false, keyStorage: "none" },
   browserOpen: false,
+  modelProfiles: [],
   version: "0.1.0",
 };
 const activePhases: AgentPhase[] = [
@@ -303,7 +300,7 @@ export default function App() {
   const blocked = !desktop || Boolean(busy);
   const completed = state.tasks.filter((t) => t.status === "completed").length;
   const elapsed = agent.startedAt
-    ? Math.max(0, Math.round((now - agent.startedAt) / 1000))
+    ? Math.max(0, Math.round(((agent.endedAt ?? now) - agent.startedAt) / 1000))
     : 0;
   const heading = {
     dashboard: ["学习工作台", "观察、理解与操作，每一步都在掌握之中。"],
@@ -324,9 +321,7 @@ export default function App() {
             Study Agent<span>YOUR LEARNING COPILOT</span>
           </div>
         </div>
-        <div className="workspace-label">
-          个人工作空间 <ChevronDown size={13} />
-        </div>
+        <div className="workspace-label">个人工作空间</div>
         <nav aria-label="主导航">
           {navItems.map((item) => (
             <button
@@ -348,18 +343,17 @@ export default function App() {
           <div>
             超星学习通<span>网页版 · 第一阶段适配</span>
           </div>
-          <span className="small-dot" />
+          <span
+            className={`connection-dot ${state.browserOpen ? "connected" : ""}`}
+            title={state.browserOpen ? "浏览器已打开" : "浏览器未打开"}
+          />
         </div>
         <div className="sidebar-bottom">
           <div className="safety-note">
             <ShieldCheck size={18} />
             <div>
-              <strong>保持真实，保持可控</strong>
-              <p>
-                遵循平台正常学习流程
-                <br />
-                关键操作由你确认
-              </p>
+              <strong>登录会话保存在本机</strong>
+              <p>浏览器操作前会请求你确认</p>
             </div>
           </div>
           <button
@@ -489,59 +483,101 @@ export default function App() {
 
           {view === "dashboard" && (
             <>
-              <div className="stats-grid">
-                <Stat
-                  label="学习任务"
-                  value={state.tasks.length.toString()}
-                  note={`${completed} 个已完成`}
-                  icon={BookOpen}
-                />
-                <Stat
-                  label="Agent 状态"
-                  value={phaseLabels[agent.phase]}
-                  note={currentTask?.name ?? "等待开始学习任务"}
-                  icon={Bot}
-                  accent
-                />
-                <Stat
-                  label="视频监测"
-                  value={agent.videos.length.toString()}
-                  note={
-                    agent.videos.some((v) => v.status === "playing")
-                      ? "正在读取真实播放状态"
-                      : "等待页面中的播放器"
+              {!state.tasks.length && (
+                <section className="panel getting-started">
+                  <h2>开始一次学习辅助</h2>
+                  <p>连接模型，打开课程，再创建一个具体的学习任务。</p>
+                  <div className="getting-started-actions">
+                    <button
+                      disabled={blocked}
+                      onClick={() => setView("settings")}
+                    >
+                      <span>1</span>
+                      <strong>
+                        {state.model.hasKey ? "模型已配置" : "连接模型"}
+                      </strong>
+                      <small>选择厂商，添加 API Key</small>
+                      <ChevronRight size={16} />
+                    </button>
+                    <button
+                      disabled={blocked}
+                      onClick={() => setBrowserModal(true)}
+                    >
+                      <span>2</span>
+                      <strong>
+                        {state.browserOpen ? "浏览器已打开" : "打开学习浏览器"}
+                      </strong>
+                      <small>手动登录并进入课程</small>
+                      <ChevronRight size={16} />
+                    </button>
+                    <button
+                      disabled={blocked}
+                      onClick={() => setTaskModal(true)}
+                    >
+                      <span>3</span>
+                      <strong>创建学习任务</strong>
+                      <small>选择页面，说明学习目标</small>
+                      <ChevronRight size={16} />
+                    </button>
+                  </div>
+                </section>
+              )}
+              {!!state.tasks.length && (
+                <div className="stats-grid">
+                  <Stat
+                    label="学习任务"
+                    value={state.tasks.length.toString()}
+                    note={`${completed} 个已完成`}
+                    icon={BookOpen}
+                  />
+                  <Stat
+                    label="Agent 状态"
+                    value={phaseLabels[agent.phase]}
+                    note={currentTask?.name ?? "等待开始学习任务"}
+                    icon={Bot}
+                    accent
+                  />
+                  <Stat
+                    label="视频监测"
+                    value={agent.videos.length.toString()}
+                    note={
+                      agent.videos.some((v) => v.status === "playing")
+                        ? "正在读取真实播放状态"
+                        : "等待页面中的播放器"
+                    }
+                    icon={Video}
+                  />
+                  <Stat
+                    label="本次模型调用"
+                    value={agent.modelCalls.toString()}
+                    note={
+                      agent.startedAt
+                        ? `已运行 ${time(elapsed)}`
+                        : "按需调用，减少重复理解"
+                    }
+                    icon={Activity}
+                  />
+                </div>
+              )}
+              {!!state.tasks.length && (
+                <TaskControl
+                  selected={selected}
+                  agentPhase={agent.phase}
+                  active={active}
+                  tasks={state.tasks}
+                  blocked={blocked}
+                  controlsBlocked={!desktop}
+                  busy={busy}
+                  select={setSelectedId}
+                  start={() =>
+                    selected && run("start", () => api!.start(selected.id))
                   }
-                  icon={Video}
+                  pause={() => interrupt(() => api!.pause())}
+                  resume={() => run("resume", () => api!.resume())}
+                  stop={() => interrupt(() => api!.stop())}
+                  add={() => setTaskModal(true)}
                 />
-                <Stat
-                  label="本次模型调用"
-                  value={agent.modelCalls.toString()}
-                  note={
-                    agent.startedAt
-                      ? `已运行 ${time(elapsed)}`
-                      : "按需调用，减少重复理解"
-                  }
-                  icon={Activity}
-                />
-              </div>
-              <TaskControl
-                selected={selected}
-                browserOpen={state.browserOpen}
-                agentPhase={agent.phase}
-                active={active}
-                tasks={state.tasks}
-                blocked={blocked}
-                controlsBlocked={!desktop}
-                busy={busy}
-                select={setSelectedId}
-                start={() =>
-                  selected && run("start", () => api!.start(selected.id))
-                }
-                pause={() => interrupt(() => api!.pause())}
-                resume={() => run("resume", () => api!.resume())}
-                stop={() => interrupt(() => api!.stop())}
-                add={() => setTaskModal(true)}
-              />
+              )}
               <div className="dashboard-grid">
                 <section className="panel observation-panel">
                   <div className="panel-header">
@@ -565,9 +601,9 @@ export default function App() {
                     </button>
                   </div>
                   <ObservationView
+                    browserOpen={state.browserOpen}
                     observation={agent.observation}
                     now={now}
-                    browserOpen={state.browserOpen}
                     open={() => setBrowserModal(true)}
                     blocked={blocked}
                   />
@@ -942,6 +978,16 @@ export default function App() {
         <TaskModal
           close={() => setTaskModal(false)}
           blocked={blocked}
+          initialUrl={agent.observation?.url}
+          currentPage={
+            state.browserOpen
+              ? async () => {
+                  const next = await api!.observe();
+                  setState(next);
+                  return next.agent.observation;
+                }
+              : undefined
+          }
           submit={(input) =>
             run("addTask", async () => {
               const next = await api!.addTask(input);
@@ -1006,7 +1052,6 @@ function Stat({
 }
 function TaskControl({
   selected,
-  browserOpen,
   agentPhase,
   active,
   tasks,
@@ -1021,7 +1066,6 @@ function TaskControl({
   add,
 }: {
   selected?: StudyTask;
-  browserOpen: boolean;
   agentPhase: AgentPhase;
   active: boolean;
   tasks: StudyTask[];
@@ -1059,7 +1103,7 @@ function TaskControl({
             </select>
             <p title={selected.goal}>{selected.goal}</p>
             <span className="task-entry-note">
-              任务 URL 是浏览器入口；已打开时从当前页面执行，请核对课程。
+              开始时打开任务地址；恢复时继续当前页面。
             </span>
           </>
         ) : (
@@ -1084,13 +1128,7 @@ function TaskControl({
               ) : (
                 <Play size={15} />
               )}
-              {active
-                ? "暂停"
-                : resumable
-                  ? "恢复"
-                  : browserOpen
-                    ? "从当前页面开始"
-                    : "打开并开始"}
+              {active ? "暂停" : resumable ? "恢复" : "开始任务"}
             </button>
             <IconButton
               label="停止任务"
@@ -1420,359 +1458,6 @@ function Logs({ logs }: { logs: AppState["logs"] }) {
     </section>
   );
 }
-function ModelSettings({
-  state,
-  blocked,
-  busy,
-  run,
-}: {
-  state: AppState;
-  blocked: boolean;
-  busy: string | null;
-  run: (
-    name: string,
-    operation: () => Promise<AppState | string | void>,
-  ) => Promise<void>;
-}) {
-  const savedConfig = (): ModelConfig => ({
-    provider: state.model.provider,
-    protocol: state.model.protocol,
-    tokenParameter: state.model.tokenParameter,
-    baseUrl: state.model.baseUrl,
-    model: state.model.model,
-    maxTokens: state.model.maxTokens,
-    timeoutMs: state.model.timeoutMs,
-    jsonMode: state.model.jsonMode,
-  });
-  const [config, setConfig] = useState<ModelConfig>(savedConfig);
-  const [dirty, setDirty] = useState(false);
-  useEffect(() => {
-    if (!dirty) setConfig(savedConfig());
-  }, [state.model, dirty]);
-  const set = <K extends keyof ModelConfig>(key: K, value: ModelConfig[K]) => {
-    setDirty(true);
-    setConfig((previous) => ({
-      ...previous,
-      [key]: value,
-      ...(key === "baseUrl" ? { provider: "custom" as const } : {}),
-    }));
-  };
-  const selectedPreset = providerPresets.find(
-    (preset) => preset.id === config.provider,
-  );
-  const currentPreset = providerPresets.find(
-    (preset) => preset.id === state.model.provider,
-  );
-  const keyConfigured =
-    state.model.hasKey &&
-    config.baseUrl === state.model.baseUrl &&
-    config.provider === state.model.provider;
-  function chooseProvider(id: ModelConfig["provider"]) {
-    setDirty(true);
-    setConfig((previous) =>
-      id === "custom"
-        ? { ...previous, provider: "custom" }
-        : applyProviderPreset(previous, id),
-    );
-  }
-  const api = window.study;
-  const host = (() => {
-    try {
-      return new URL(state.model.baseUrl).host;
-    } catch {
-      return state.model.baseUrl;
-    }
-  })();
-  function save(e: FormEvent) {
-    e.preventDefault();
-    void run("saveModel", async () => {
-      const result = await api!.saveModel(config);
-      setDirty(false);
-      return result;
-    });
-  }
-  function configureKey(source: "clipboard" | "file") {
-    void run(source === "clipboard" ? "pasteKey" : "setKey", async () => {
-      // Bind a new credential to the edited endpoint, after clearing its old key.
-      if (dirty) {
-        await api!.saveModel(config);
-        setDirty(false);
-      }
-      return source === "clipboard" ? api!.pasteApiKey() : api!.setApiKey();
-    });
-  }
-  return (
-    <div className="connection-settings">
-      <form className="panel connection-card" onSubmit={save}>
-        <div className="connection-overview">
-          <div className="connection-provider-icon">
-            <Bot size={24} />
-          </div>
-          <div className="connection-current">
-            <span>{currentPreset?.label ?? "自定义服务"} · 当前模型</span>
-            <h2>{state.model.model}</h2>
-            <p>{host}</p>
-          </div>
-          <Badge tone={state.model.hasKey ? "teal" : "neutral"}>
-            {state.model.hasKey ? "密钥已保存" : "未设置密钥"}
-          </Badge>
-        </div>
-        <div className="connection-body">
-          <div
-            className="provider-picker"
-            role="group"
-            aria-label="选择模型厂商"
-          >
-            {providerPresets.map((preset) => (
-              <button
-                key={preset.id}
-                type="button"
-                className={`provider-choice ${config.provider === preset.id ? "selected" : ""}`}
-                aria-pressed={config.provider === preset.id}
-                disabled={blocked}
-                onClick={() => chooseProvider(preset.id)}
-              >
-                {preset.label}
-              </button>
-            ))}
-            <button
-              type="button"
-              className={`provider-choice custom ${config.provider === "custom" ? "selected" : ""}`}
-              aria-pressed={config.provider === "custom"}
-              disabled={blocked}
-              onClick={() => chooseProvider("custom")}
-            >
-              自定义
-            </button>
-          </div>
-          <p className="provider-description">
-            {selectedPreset?.description ??
-              "填写服务地址和支持图片输入的模型名称。"}
-          </p>
-          <div className="connection-fields">
-            <label className="field">
-              服务地址 <span className="field-label-english">API Base URL</span>
-              <input
-                type="url"
-                required
-                value={config.baseUrl}
-                onChange={(e) => set("baseUrl", e.target.value)}
-                placeholder="https://api.openai.com/v1"
-              />
-            </label>
-            <label className="field">
-              模型名称 <span className="field-label-english">Model Name</span>
-              <input
-                required
-                value={config.model}
-                onChange={(e) => set("model", e.target.value)}
-                placeholder="输入支持视觉的模型名称"
-              />
-            </label>
-          </div>
-          <div className="connection-key-row">
-            <KeyRound size={17} />
-            <div className="connection-key-copy">
-              <strong>
-                API Key <span>{keyConfigured ? "已配置" : "未配置"}</span>
-              </strong>
-              <p>
-                {!keyConfigured
-                  ? "复制该厂商的密钥后点击粘贴"
-                  : state.model.keyStorage === "encrypted"
-                    ? "已在本机加密保存"
-                    : state.model.keyStorage === "session"
-                      ? "仅当前会话有效"
-                      : "复制密钥后点击粘贴，应用会安全保存"}
-              </p>
-            </div>
-            <div className="connection-key-actions">
-              <button
-                className="button secondary compact"
-                type="button"
-                disabled={blocked}
-                onClick={() => configureKey("clipboard")}
-              >
-                {keyConfigured ? "更换 API Key" : "粘贴 API Key"}
-              </button>
-              <button
-                className="text-button"
-                type="button"
-                disabled={blocked}
-                onClick={() => configureKey("file")}
-              >
-                从文件导入
-              </button>
-              {keyConfigured && (
-                <IconButton
-                  label="移除密钥"
-                  disabled={blocked}
-                  onClick={() => run("clearKey", () => api!.clearApiKey())}
-                >
-                  <Trash2 size={15} />
-                </IconButton>
-              )}
-            </div>
-          </div>
-          <details className="connection-advanced">
-            <summary>
-              <Settings2 size={14} />
-              <span>高级设置</span>
-              <ChevronDown size={13} />
-            </summary>
-            <div className="connection-advanced-fields">
-              {config.provider === "custom" && (
-                <label className="field">
-                  API 协议
-                  <select
-                    value={config.protocol}
-                    onChange={(e) =>
-                      set("protocol", e.target.value as ModelConfig["protocol"])
-                    }
-                  >
-                    <option value="chat_completions">Chat Completions</option>
-                    <option value="responses">OpenAI Responses</option>
-                    <option value="anthropic">Anthropic Messages</option>
-                  </select>
-                </label>
-              )}
-              {config.provider === "custom" &&
-                config.protocol === "chat_completions" && (
-                  <label className="field">
-                    输出上限参数
-                    <select
-                      value={config.tokenParameter}
-                      onChange={(e) =>
-                        set(
-                          "tokenParameter",
-                          e.target.value as ModelConfig["tokenParameter"],
-                        )
-                      }
-                    >
-                      <option value="max_tokens">max_tokens</option>
-                      <option value="max_completion_tokens">
-                        max_completion_tokens
-                      </option>
-                    </select>
-                  </label>
-                )}
-              <label className="field">
-                最大输出 Token
-                <input
-                  type="number"
-                  step="1"
-                  min="256"
-                  max="16000"
-                  required
-                  value={config.maxTokens}
-                  onChange={(e) => set("maxTokens", Number(e.target.value))}
-                />
-              </label>
-              <label className="field">
-                请求超时（秒）
-                <input
-                  type="number"
-                  min="5"
-                  max="180"
-                  required
-                  value={config.timeoutMs / 1000}
-                  onChange={(e) =>
-                    set("timeoutMs", Number(e.target.value) * 1000)
-                  }
-                />
-              </label>
-              {config.protocol !== "anthropic" && (
-                <label className="connection-json-toggle">
-                  <input
-                    type="checkbox"
-                    checked={config.jsonMode}
-                    onChange={(e) => set("jsonMode", e.target.checked)}
-                  />
-                  <span>JSON 输出模式</span>
-                </label>
-              )}
-            </div>
-          </details>
-        </div>
-        <div className="connection-actions">
-          <span>{dirty ? "有未保存的修改" : "使用支持图片输入的模型"}</span>
-          <div>
-            <button
-              type="button"
-              className="button secondary"
-              disabled={blocked || dirty}
-              onClick={() => run("testModel", () => api!.testModel())}
-            >
-              {busy === "testModel" ? (
-                <LoaderCircle size={15} className="spinning" />
-              ) : (
-                <Activity size={15} />
-              )}
-              测试连接
-            </button>
-            <button
-              className="button primary"
-              type="submit"
-              disabled={blocked || !dirty}
-            >
-              <Check size={15} />
-              保存配置
-            </button>
-          </div>
-        </div>
-      </form>
-      <div className="connection-privacy">
-        <ShieldCheck size={14} />
-        <p>页面截图会发送到你配置的模型服务，请在登录完成后使用。</p>
-      </div>
-      <details className="panel connection-local">
-        <summary>
-          <FolderOpen size={16} />
-          <span>本地数据与浏览器</span>
-          <ChevronDown size={14} />
-        </summary>
-        <div className="connection-local-body">
-          <div className="local-settings-row">
-            <div>
-              <strong>应用数据</strong>
-              <p>任务与登录会话保存在本机。</p>
-            </div>
-            <button
-              className="button secondary compact"
-              disabled={blocked}
-              onClick={() => run("dataFolder", () => api!.openDataFolder())}
-            >
-              <FolderOpen size={14} />
-              打开目录
-            </button>
-          </div>
-          <div className="local-settings-row">
-            <div>
-              <strong>学习浏览器</strong>
-              <p>
-                {state.browserOpen
-                  ? "关闭后保留合法登录会话。"
-                  : "浏览器尚未打开。"}
-              </p>
-            </div>
-            <button
-              className="button secondary compact"
-              disabled={
-                blocked ||
-                !state.browserOpen ||
-                activePhases.includes(state.agent.phase)
-              }
-              onClick={() => run("closeBrowser", () => api!.closeBrowser())}
-            >
-              <Square size={14} />
-              关闭浏览器
-            </button>
-          </div>
-        </div>
-      </details>
-    </div>
-  );
-}
 function Modal({
   title,
   subtitle,
@@ -1838,14 +1523,20 @@ function Modal({
 function TaskModal({
   close,
   blocked,
+  initialUrl,
+  currentPage,
   submit,
 }: {
   close: () => void;
   blocked: boolean;
+  initialUrl?: string;
+  currentPage?: () => Promise<Observation | null>;
   submit: (input: { name: string; url: string; goal: string }) => void;
 }) {
   const [name, setName] = useState("");
-  const [url, setUrl] = useState("https://i.chaoxing.com/");
+  const [url, setUrl] = useState(initialUrl ?? "https://i.chaoxing.com/");
+  const [reading, setReading] = useState(false);
+  const [pageError, setPageError] = useState("");
   const [goal, setGoal] = useState(
     "观察当前课程页面，识别学习任务并提供下一步操作建议。",
   );
@@ -1884,6 +1575,35 @@ function TaskModal({
             />
             <span>从学习通浏览器复制课程或章节地址。请先手动完成登录。</span>
           </label>
+          {currentPage && (
+            <button
+              type="button"
+              className="text-button"
+              disabled={blocked || reading}
+              onClick={async () => {
+                setReading(true);
+                setPageError("");
+                try {
+                  const page = await currentPage();
+                  if (page) {
+                    setUrl(page.url);
+                    if (!name.trim()) setName(page.title.slice(0, 100));
+                  }
+                } catch (error) {
+                  setPageError(
+                    error instanceof Error
+                      ? error.message
+                      : "无法读取页面，请手动填写地址。",
+                  );
+                } finally {
+                  setReading(false);
+                }
+              }}
+            >
+              {reading ? "正在读取当前页面…" : "使用当前浏览器页面"}
+            </button>
+          )}
+          {pageError && <p role="alert">{pageError}</p>}
           <label className="field">
             本次学习目标
             <textarea

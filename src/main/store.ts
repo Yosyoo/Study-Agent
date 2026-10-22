@@ -1,5 +1,6 @@
 import { mkdir, readFile, rename, writeFile, chmod } from 'node:fs/promises'
 import { join } from 'node:path'
+import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import { defaultModelConfig, modelConfigSchema, taskInputSchema, type LogEntry, type ModelConfig, type StudyTask } from '../shared/contracts'
 
@@ -10,15 +11,23 @@ const savedTaskSchema = taskInputSchema.extend({
 const logSchema = z.object({ id: z.string().uuid(), at: z.number(), level: z.enum(['info', 'warn', 'error']), message: z.string().max(2000) })
 const savedStateSchema = z.object({
   version: z.literal(1), model: modelConfigSchema, tasks: z.array(savedTaskSchema).max(500), logs: z.array(logSchema).max(200),
+  modelProfiles: z.array(modelConfigSchema).max(7).default([]),
 })
-export interface SavedState { version: 1; model: ModelConfig; tasks: StudyTask[]; logs: LogEntry[] }
-export const emptyState = (): SavedState => ({ version: 1, model: { ...defaultModelConfig }, tasks: [], logs: [] })
+export interface SavedState { version: 1; model: ModelConfig; modelProfiles: ModelConfig[]; tasks: StudyTask[]; logs: LogEntry[] }
+export const emptyState = (): SavedState => ({ version: 1, model: { ...defaultModelConfig }, modelProfiles: [], tasks: [], logs: [] })
+
+/** Credentials belong to a provider AND exact normalized API endpoint, never a model name. */
+export function credentialScope(config: Pick<ModelConfig, 'provider' | 'baseUrl'>): string {
+  const url = new URL(config.baseUrl)
+  url.pathname = url.pathname.replace(/\/+$/, '')
+  return createHash('sha256').update(`${config.provider}\n${url.href}`).digest('hex')
+}
 
 /** Atomic replacement and ordered writes protect the last valid state from partial saves. */
 export class StateStore {
   private chain: Promise<void> = Promise.resolve()
   constructor(readonly directory: string) {}
-  async load(): Promise<{ state: SavedState; warning?: string }> {
+  async load(): Promise<{ state: SavedState; hasSavedState: boolean; warning?: string }> {
     await mkdir(this.directory, { recursive: true, mode: 0o700 })
     try {
       const data = await readFile(join(this.directory, 'state.json'), 'utf8')
@@ -41,12 +50,12 @@ export class StateStore {
           task.status = 'stopped'; task.lastMessage = '应用已重新启动。请手动核对当前页面并重新开始。'
         }
       }
-      return { state }
+      return { state, hasSavedState: true }
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { state: emptyState() }
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { state: emptyState(), hasSavedState: false }
       // Preserve evidence instead of silently overwriting damaged/unknown-version data.
       try { await rename(join(this.directory, 'state.json'), join(this.directory, `state.invalid-${Date.now()}.json`)) } catch { /* load still reports recovery */ }
-      return { state: emptyState(), warning: '本地状态文件无法读取，原文件已尝试保留为 state.invalid 文件，已使用空状态启动。' }
+      return { state: emptyState(), hasSavedState: false, warning: '本地状态文件无法读取，原文件已尝试保留为 state.invalid 文件，已使用空状态启动。' }
     }
   }
   save(state: SavedState): Promise<void> {
@@ -73,21 +82,27 @@ export interface SecretEncryption {
 export class SecretStore {
   private value = ''
   private storage: 'encrypted' | 'session' | 'none' = 'none'
-  constructor(private readonly directory: string, private readonly encryption: SecretEncryption) {}
+  private readonly directory: string
+  private readonly path: string
+  constructor(directory: string, private readonly encryption: SecretEncryption, scope?: string) {
+    if (scope && !/^[a-f0-9]{64}$/.test(scope)) throw new Error('无效的密钥存储范围。')
+    this.directory = scope ? join(directory, 'keys') : directory
+    this.path = join(this.directory, scope ? `${scope}.bin` : 'model-key.bin')
+  }
   get key(): string { return this.value }
   get mode(): 'encrypted' | 'session' | 'none' { return this.storage }
   async load(environmentKey?: string): Promise<void> {
     if (environmentKey) { this.value = environmentKey; this.storage = 'session'; return }
     if (!this.encryption.isEncryptionAvailable()) return
     try {
-      const bytes = await readFile(join(this.directory, 'model-key.bin'))
+      const bytes = await readFile(this.path)
       this.value = this.encryption.decryptString(bytes); this.storage = this.value ? 'encrypted' : 'none'
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw new Error('已保存的 API Key 无法解密，请重新导入。') }
   }
   async set(key: string): Promise<void> {
     if (this.encryption.isEncryptionAvailable()) {
       await mkdir(this.directory, { recursive: true, mode: 0o700 })
-      const path = join(this.directory, 'model-key.bin')
+      const path = this.path
       await writeFile(`${path}.tmp`, this.encryption.encryptString(key), { mode: 0o600 })
       await rename(`${path}.tmp`, path)
       await chmod(path, 0o600)
@@ -101,7 +116,7 @@ export class SecretStore {
   }
   async clear(): Promise<void> {
     const { unlink } = await import('node:fs/promises')
-    try { await unlink(join(this.directory, 'model-key.bin')) } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+    try { await unlink(this.path) } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
     this.value = ''; this.storage = 'none'
   }
 }

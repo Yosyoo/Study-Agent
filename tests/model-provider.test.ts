@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { OpenAICompatibleProvider, parseDecision, SYSTEM_PROMPT } from '../src/main/model/provider'
 import { defaultModelConfig, type ModelConfig, type ModelDecision, type ModelInput } from '../src/shared/contracts'
+import * as vision from '../src/main/model/vision-probe'
 
 const chatConfig: ModelConfig = { ...defaultModelConfig, provider: 'custom', protocol: 'chat_completions', tokenParameter: 'max_tokens', maxTokens: 4000, timeoutMs: 60000 }
 
@@ -57,10 +58,12 @@ describe('native provider protocols', () => {
   })
 
   it.each(['responses', 'anthropic'] as const)('%s protocol connection test sends a native image probe', async protocol => {
-    const fetcher = vi.fn<typeof fetch>(async () => nativeEnvelope(protocol, '{"ok":true}'))
+    const probe = vision.createVisionProbe()
+    vi.spyOn(vision, 'createVisionProbe').mockReturnValue(probe)
+    const fetcher = vi.fn<typeof fetch>(async () => nativeEnvelope(protocol, JSON.stringify({ colors: probe.colors })))
     const config: ModelConfig = { ...chatConfig, protocol }
     const result = await new OpenAICompatibleProvider(config, 'key', { fetch: fetcher }).testConnection()
-    expect(result).toContain('协议和凭证')
+    expect(result).toContain('视觉连接验证通过')
     const body = JSON.parse(fetcher.mock.calls[0][1]!.body as string)
     if (protocol === 'responses') expect(body.input[0].content[1].image_url).toMatch(/^data:image\/png;base64,/)
     else expect(body.messages[0].content[0].source).toMatchObject({ type: 'base64', media_type: 'image/png' })
@@ -91,7 +94,7 @@ describe('native provider protocols', () => {
   })
 })
 
-afterEach(() => vi.useRealTimers())
+afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks() })
 
 describe('structured model decision boundary', () => {
   it('accepts exact JSON and a single JSON fence', () => {
@@ -223,11 +226,20 @@ describe('OpenAICompatibleProvider transport', () => {
   })
 
   it('connection test sends an actual image and describes its scope accurately', async () => {
-    const fetcher = vi.fn<typeof fetch>(async () => envelope('{"ok":true}'))
+    const probe = vision.createVisionProbe()
+    vi.spyOn(vision, 'createVisionProbe').mockReturnValue(probe)
+    const fetcher = vi.fn<typeof fetch>(async () => envelope(JSON.stringify({ colors: probe.colors })))
     const provider = new OpenAICompatibleProvider(chatConfig, 'key', { fetch: fetcher })
     const result = await provider.testConnection()
-    expect(result).toContain('协议和凭证')
+    expect(result).toContain('视觉连接验证通过')
     const body = JSON.parse(fetcher.mock.calls[0][1]!.body as string)
     expect(body.messages[1].content[1].image_url.url).toMatch(/^data:image\/png;base64,/)
+    expect(body.messages[1].content[0].text).not.toContain(JSON.stringify(probe.colors))
+  })
+
+  it('fails a provider that returns the former fixed success reply without reading the image', async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => envelope('{"ok":true}'))
+    await expect(new OpenAICompatibleProvider(chatConfig, 'key', { fetch: fetcher }).testConnection()).rejects.toThrow('未通过图片内容校验')
+    expect(fetcher).toHaveBeenCalledTimes(1)
   })
 })

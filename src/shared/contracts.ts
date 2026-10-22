@@ -55,13 +55,13 @@ export const modelConfigSchema = z.object({
   provider: providerIdSchema.default('custom'),
   protocol: modelProtocolSchema.default('chat_completions'),
   tokenParameter: z.enum(['max_tokens', 'max_completion_tokens']).default('max_tokens'),
-  baseUrl: z.string().url().max(2048), model: z.string().min(1).max(200),
+  baseUrl: z.string().trim().url().max(2048), model: z.string().trim().min(1).max(200),
   maxTokens: z.number().int().min(256).max(16000),
   timeoutMs: z.number().int().min(5000).max(180000), jsonMode: z.boolean(),
 }).strict()
 export type ModelConfig = z.infer<typeof modelConfigSchema>
 export interface PublicModelConfig extends ModelConfig { hasKey: boolean; keyStorage: 'encrypted' | 'session' | 'none' }
-export const taskInputSchema = z.object({ name: z.string().min(1).max(100), url: z.string().url().max(2048), goal: z.string().min(1).max(2000) }).strict()
+export const taskInputSchema = z.object({ name: z.string().trim().min(1).max(100), url: z.string().trim().url().max(2048), goal: z.string().trim().min(1).max(2000) }).strict()
 export type TaskInput = z.infer<typeof taskInputSchema>
 export interface StudyTask extends TaskInput {
   id: string; status: 'pending' | 'running' | 'paused' | 'needs_user' | 'completed' | 'stopped' | 'error';
@@ -74,12 +74,13 @@ export interface PendingConfirmation {
 }
 export interface AgentSnapshot {
   phase: AgentPhase; taskId: string | null; step: number; modelCalls: number;
-  startedAt: number | null; message: string; observation: Observation | null;
+  startedAt: number | null; endedAt: number | null; message: string; observation: Observation | null;
   decision: ModelDecision | null; pending: PendingConfirmation | null; videos: VideoState[]
 }
 export interface LogEntry { id: string; at: number; level: 'info' | 'warn' | 'error'; message: string }
 export interface AppState {
   tasks: StudyTask[]; agent: AgentSnapshot; logs: LogEntry[]; model: PublicModelConfig;
+  modelProfiles: PublicModelConfig[];
   browserOpen: boolean; version: string
 }
 export interface StudyAPI {
@@ -103,7 +104,7 @@ export interface StudyAPI {
   openDataFolder(): Promise<void>;
 }
 export const initialAgent: AgentSnapshot = {
-  phase: 'idle', taskId: null, step: 0, modelCalls: 0, startedAt: null,
+  phase: 'idle', taskId: null, step: 0, modelCalls: 0, startedAt: null, endedAt: null,
   message: '准备就绪，打开浏览器并手动登录后开始任务。', observation: null, decision: null, pending: null, videos: [],
 }
 export const defaultModelConfig: ModelConfig = {

@@ -1,28 +1,32 @@
 # 验收记录
 
-记录日期：2026-10-20（Asia/Shanghai）。本机为 macOS Apple Silicon；实际使用 Node 26.7.0、npm 11.19.0。推荐开发环境为 Node 24 LTS。依赖实际锁定版本见 `package-lock.json`。
+最近复审日期：2026-10-22（Asia/Shanghai）。本机为 macOS Apple Silicon；实际使用 Node 26.7.0、npm 11.19.0。推荐开发环境为 Node 24 LTS。依赖实际锁定版本见 `package-lock.json`。
 
 ## 已执行并通过
 
 | 检查 | 结果 | 证据范围 |
 | --- | --- | --- |
 | `npm run typecheck` | 通过 | main/preload/renderer/shared/tests 的严格 TypeScript 检查 |
-| `npm test` | 6 个文件，91 项通过 | 三协议 Provider、六家预设、Harness、视频、URL/坐标、持久化/密钥/脱敏与旧配置迁移 |
-| `npm run test:browser` | 2 个文件，16 项通过 | 真实 headless Chromium，本地 HTTP fixture 与脚本模型响应 |
+| `npm test` | 7 个文件，97 项通过 | 三协议 Provider、六家预设、随机视觉挑战、Harness、视频、URL/坐标、分厂商密钥与旧配置迁移 |
+| `npm run test:browser` | 2 个文件，20 项通过 | 真实 headless Chromium，本地 HTTP fixture 与脚本模型响应 |
 | `npm run build` | 通过 | Electron main、sandboxed preload CJS、React/Tailwind renderer |
-| `npm run test:desktop` | 通过 | 真实开发版 Electron，六家预设逐家填入/保存、任务增删、非法 URL、设置实际保存、无 renderer 异常 |
+| `npm run test:desktop` | 通过 | 两个脚本：真实 Electron 的配置/密钥往返恢复、最小窗口布局、实际 HTTP 视觉挑战与 401、迁移/重启、任务 URL、启动取消和无 Key 视频监测 |
 | `npm run package` | 通过 | 原生 darwin/arm64 `.app`，包含 Chromium |
 | 指定 `STUDY_AGENT_SMOKE_EXECUTABLE` 的桌面测试 | 通过 | 打包后的 `Study Agent.app`，独立临时 profile |
 | 打包资源中的 Chromium | 通过 | 独立启动、创建页面、真实按钮点击，未依赖开发浏览器缓存 |
-| 界面截图检查 | 通过 | `.local/desktop-dashboard.png`、`.local/desktop-settings.png`；修复了 Token 步长校验和低对比说明文字 |
+| 界面截图检查 | 通过 | `.local/desktop-dashboard.png`、`.local/desktop-provider-presets.png`、`.local/desktop-settings-compact.png`、`.local/desktop-model-error.png`；实际窗口 1440×940 与 1100×720 |
 
-浏览器本地集成测试覆盖：JPEG 截图与 1280×800 映射、iframe 视频 `currentTime` 实际推进、iframe 输入、单次点击、页面结构/同位置标签变化后拒绝旧确认、敏感控件与按键保护、已取消操作不派发、隐藏播放器过滤、多个任务点保守完成判断。
+浏览器本地集成测试覆盖：JPEG 截图与 1280×800 映射、iframe 视频 `currentTime` 实际推进、iframe 输入、单次点击、页面结构/同位置标签变化后拒绝旧确认、敏感控件与按键保护、已取消操作不派发、隐藏播放器过滤、多个任务点保守完成判断；超过 30 秒但像素未变时续验，像素变化时拒绝；练习优先于残留视频；503 有限重试后可重新打开相同地址。
 
 模型闭环集成测试覆盖：真实 Chromium 截图通过 `image_url` 发给本地 HTTP 服务；脚本响应提出导航点击；确认前没有操作，确认后实际导航并重新截图；随后进入题目建议核对；核对不提交。可见与隐藏的题目 DOM canary 都没有作为文本发送。延迟 HTTP 期间暂停/停止不会触发点击。**脚本响应不具备视觉推理能力，这些测试只验证工程闭环。**
 
-模型单元测试覆盖非法 JSON/结构/坐标、输出大小、截断、非 JSON 响应、凭证错误不重试、429/5xx 有限重试、重定向禁止、超时/取消、错误脱敏和图像探针。Harness 测试覆盖低置信度、确认重复点击、暂停失效、完成状态不被退出覆盖、无进展、重复建议与预算。
+模型单元测试覆盖非法 JSON/结构/坐标、输出大小、截断、非 JSON 响应、凭证错误不重试、429/5xx 有限重试、重定向禁止、超时/取消、错误脱敏和随机色块读图校验。Harness 测试覆盖低置信度、确认重复点击、暂停失效、完成状态不被退出覆盖、无进展、重复建议与预算。
 
-六家视觉预设已对照 2026-10-20 官方文档核对；三种协议通过模拟 HTTP 测试验证原生图像格式、认证头、token 字段、最终文本解析与拒绝未授权工具结果。原生厂商付费端点尚未使用真实 Key 逐家调用，不能把协议回归测试视为账户可用性或模型效果验收。四类磁盘迁移测试保留任务、用户预算和密钥密文字节，只更新旧出厂官方默认。
+六家视觉预设于 2026-10-22 重新打开官方文档核对；三种协议通过模拟 HTTP 测试验证原生图像格式、认证头、token 字段、最终文本解析与拒绝未授权工具结果。原生厂商付费端点尚未使用真实 Key 逐家调用，不能把协议回归测试视为账户可用性或模型效果验收。四类磁盘迁移测试保留任务、用户预算和密钥密文字节，只更新旧出厂官方默认。
+
+桌面工作流使用本地 HTTP 服务接收实际图片，并独立解码 PNG 返回颜色顺序；固定 `ok:true` 和 HTTP 401 均被拒绝。开发版实际浏览器验证课程 A 已打开时启动课程 B 会进入 B、慢加载中停止不调用模型，以及无 Key 仍可监测正常播放的视频。打包版使用同一临时资料测试，并验证开发期本地课程访问开关在包内无效。它不运行允许本地课程导航的开发专属分支。
+
+旧单密钥文件迁移使用真实 Electron `safeStorage` 加密测试值、关闭应用、恢复旧版磁盘结构、再次启动验证；没有读取真实用户凭据。每次测试均关闭自己的窗口与浏览器并删除临时资料。
 
 ## 学习通与真实模型验收
 
@@ -50,7 +54,7 @@
 
 ## 依赖审计
 
-升级维护版本 `electron-builder 26.15.3` 后：生产依赖 `npm audit --omit=dev` 为 **0 项告警**；完整依赖审计保留 **8 条中危、0 高危、0 严重**。
+2026-10-20 升级维护版本 `electron-builder 26.15.3` 后的审计记录（本轮未变更依赖）：生产依赖 `npm audit --omit=dev` 为 **0 项告警**；完整依赖审计保留 **8 条中危、0 高危、0 严重**。
 
 剩余记录源于开发期下载/打包工具的一个未获兼容修复的 `sprintf-js` 格式精度拒绝服务问题，经 `roarr@2 → global-agent@3 → @electron/get@3 → app-builder-lib` 传播。没有采用 npm 建议的强制旧版打包器降级，也没有加入未经上游支持的主版本 override。`tar`、`@electron/rebuild`、`builder-util-runtime` 的已知高危链已更新。后续应随上游兼容更新复查。
 
@@ -61,3 +65,5 @@
 3. 在已有三协议和六家预设基础上补充真实厂商端点验收，持续更新预设核验日期，改善不兼容端点的诊断。
 4. 在有稳定真实样本后添加课程导入与明确的任务点数据模型，保留人工监督边界。
 5. 完成图标、签名、公证、安装器与更新机制后再做正式分发。
+
+本轮问题、复现条件、修复位置与剩余限制见 [REVIEW-2026-10-22.md](REVIEW-2026-10-22.md)。

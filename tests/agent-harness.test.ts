@@ -138,6 +138,17 @@ describe('AgentHarness execution boundary', () => {
     await harness.confirm(harness.snapshot.pending!.id, true)
     await waitPhase(harness, 'needs_user')
     expect(browser.execute).toHaveBeenCalledTimes(1)
+    expect(harness.snapshot.message).toContain('timeout may have succeeded')
+  })
+
+  it('surfaces the actual provider error with credentials redacted', async () => {
+    const { harness, provider, log } = setup()
+    provider.decide.mockRejectedValueOnce(new Error('HTTP 401 API Key 无效 token=very-private'))
+    await harness.start(task)
+    await waitPhase(harness, 'needs_user')
+    expect(harness.snapshot.message).toContain('HTTP 401')
+    expect(harness.snapshot.message).not.toContain('very-private')
+    expect(JSON.stringify(log.mock.calls)).not.toContain('very-private')
   })
 })
 
@@ -211,6 +222,15 @@ describe('AgentHarness finite execution', () => {
 })
 
 describe('AgentHarness deterministic video monitoring', () => {
+  it('analyzes visible exercises even when the page retains a paused video', async () => {
+    const { harness, browser, provider } = setup()
+    vi.mocked(browser.observe).mockResolvedValue({ ...observation(), pageType: 'exercise', videos: [video({ paused: true })] })
+    provider.decide.mockResolvedValueOnce(decision({ action: null, needsHuman: true, summary: '核对题目截图' }))
+    await harness.start(task)
+    await waitPhase(harness, 'needs_user')
+    expect(provider.decide).toHaveBeenCalledTimes(1)
+    expect(harness.snapshot.message).toContain('核对题目截图')
+  })
   it('requests manual playback when paused without any model call', async () => {
     const { harness, browser, provider } = setup()
     vi.mocked(browser.observe).mockResolvedValue({ ...observation(), pageType: 'video', videos: [video({ paused: true })] })

@@ -11,8 +11,9 @@ import { BrowserController } from './browser/controller'
 import { urlAllowed } from './browser/policy'
 import { MultimodalProvider } from './model/provider'
 import { isTrustedRendererUrl, redact, validateApiKey } from './security'
-import { SecretStore, StateStore, type SavedState } from './store'
-import { initialAgent, modelConfigSchema, taskInputSchema, type AgentSnapshot, type AppState, type StudyTask } from '../shared/contracts'
+import { credentialScope, SecretStore, StateStore, type SavedState } from './store'
+import { initialAgent, defaultModelConfig, modelConfigSchema, taskInputSchema, type AgentSnapshot, type AppState, type ModelConfig, type StudyTask } from '../shared/contracts'
+import { applyProviderPreset, providerPresets } from '../shared/providers'
 
 const directory = dirname(fileURLToPath(import.meta.url))
 let window: BrowserWindow | null = null
@@ -21,6 +22,7 @@ let harness: AgentHarness | null = null
 let agent: AgentSnapshot = structuredClone(initialAgent)
 let store: StateStore
 let secrets: SecretStore
+const credentials = new Map<string, SecretStore>()
 let saved: SavedState
 let rendererUrl = ''
 let closing = false
@@ -28,6 +30,7 @@ let shuttingDown = false
 let busy = false
 let keyDialogOpen = false
 let controlGeneration = 0
+let startingTask = false
 let persistTimer: ReturnType<typeof setTimeout> | null = null
 
 if (!app.isPackaged) loadEnv({ quiet: true })
@@ -42,8 +45,27 @@ const active = (): boolean => !['idle', 'completed', 'stopped', 'error'].include
 const fixtureOrigins = (): string[] => !app.isPackaged && process.env.STUDY_AGENT_LOCAL_FIXTURE === '1'
   ? ['http://127.0.0.1:4178', 'http://localhost:4178'] : []
 function state(): AppState {
+  const publicConfig = (config: ModelConfig) => {
+    const secret = credentials.get(credentialScope(config))
+    return { ...config, hasKey: !!secret?.key, keyStorage: secret?.mode ?? 'none' as const }
+  }
+  const profiles = providerPresets.map(preset => applyProviderPreset(defaultModelConfig, preset.id))
+  for (const config of [...saved.modelProfiles, saved.model]) {
+    const index = profiles.findIndex(profile => profile.provider === config.provider)
+    if (index === -1) profiles.push(config)
+    else profiles[index] = config
+  }
   return { tasks: saved.tasks, logs: saved.logs, agent, browserOpen: browser?.isOpen ?? false,
-    version: app.getVersion(), model: { ...saved.model, hasKey: !!secrets.key, keyStorage: secrets.mode } }
+    version: app.getVersion(), model: publicConfig(saved.model), modelProfiles: profiles.map(publicConfig) }
+}
+async function credentialsFor(config: ModelConfig): Promise<SecretStore> {
+  const scope = credentialScope(config)
+  const cached = credentials.get(scope)
+  if (cached) return cached
+  const secret = new SecretStore(store.directory, safeStorage, scope)
+  await secret.load()
+  credentials.set(scope, secret)
+  return secret
 }
 function publish(): AppState {
   const value = state()
@@ -121,20 +143,20 @@ async function packagedBrowserExecutable(): Promise<string | undefined> {
 
 function registerIPC(): void {
   handle('study:get-state', () => state())
-  handle('study:add-task', raw => {
+  handle('study:add-task', raw => exclusive(async () => {
     const input = taskInputSchema.parse(raw)
     if (!urlAllowed(input.url, fixtureOrigins())) throw new Error('课程地址必须为支持的平台 HTTPS 地址。')
     if (saved.tasks.length >= 500) throw new Error('已达到 500 条任务上限，请先删除不再需要的任务。')
     const now = Date.now()
     saved.tasks.unshift({ ...input, id: randomUUID(), createdAt: now, updatedAt: now, status: 'pending', lastMessage: '' })
     persistSoon(); return publish()
-  })
-  handle('study:delete-task', raw => {
+  }))
+  handle('study:delete-task', raw => exclusive(async () => {
     const id = idSchema.parse(raw)
     if (agent.taskId === id && active()) throw new Error('请先停止该任务，再删除记录。')
     saved.tasks = saved.tasks.filter(task => task.id !== id)
     persistSoon(); return publish()
-  })
+  }))
   handle('study:open-browser', raw => exclusive(async () => {
     if (active() && !['paused', 'needs_user'].includes(agent.phase)) throw new Error('请先暂停或停止 Agent，再打开学习页面。')
     if (active()) harness?.pause()
@@ -158,17 +180,34 @@ function registerIPC(): void {
     const generation = ++controlGeneration
     const task = saved.tasks.find(t => t.id === idSchema.parse(raw))
     if (!task) throw new Error('任务记录不存在。')
-    if (!secrets.key && new URL(saved.model.baseUrl).protocol !== 'http:') throw new Error('请先在模型设置中导入 API Key，或配置本机模型服务。')
-    if (!browser.isOpen) await browser.open(task.url)
-    if (generation !== controlGeneration || shuttingDown) return publish()
     harness?.dispose()
-    harness = new AgentHarness({ browser, provider: provider(), onUpdate: updateAgent, log })
-    await harness.start(task)
-    return publish()
+    harness = null
+    startingTask = true
+    updateAgent({ ...structuredClone(initialAgent), taskId: task.id, phase: 'observing', startedAt: Date.now(), message: '正在打开任务地址…可随时停止启动。' })
+    try {
+      // Starting a saved task must honor its URL even if another course is already open.
+      await browser.open(task.url)
+      if (generation !== controlGeneration || shuttingDown) return publish()
+      harness = new AgentHarness({ browser, provider: { decide: input => {
+        if (!secrets.key && new URL(saved.model.baseUrl).protocol !== 'http:') {
+          throw new Error('需要分析截图，请先停止任务，在「模型与设置」中为当前厂商配置 API Key。视频监测不需要密钥。')
+        }
+        return provider().decide(input)
+      } }, onUpdate: updateAgent, log })
+      await harness.start(task)
+      return publish()
+    } catch (error) {
+      if (generation !== controlGeneration || shuttingDown) return publish()
+      updateAgent({ ...agent, phase: 'error', endedAt: Date.now(), message: redact(error instanceof Error ? error.message : '无法打开任务地址。') })
+      throw error
+    } finally { startingTask = false }
   }))
-  handle('study:pause', () => { controlGeneration++; harness?.pause(); return publish() })
+  const cancelStart = (): void => {
+    if (startingTask) updateAgent({ ...agent, phase: 'stopped', endedAt: Date.now(), pending: null, message: '已取消任务启动。已发出的页面加载可能仍会结束，Agent 不会继续执行。' })
+  }
+  handle('study:pause', () => { controlGeneration++; cancelStart(); harness?.pause(); return publish() })
   handle('study:resume', () => { if (!harness) throw new Error('没有可恢复的任务。'); harness.resume(); return publish() })
-  handle('study:stop', () => { controlGeneration++; harness?.stop(); return publish() })
+  handle('study:stop', () => { controlGeneration++; cancelStart(); harness?.stop(); return publish() })
   handle('study:confirm', async (rawId, rawApproved) => {
     if (!harness) throw new Error('没有待确认操作。')
     await harness.confirm(idSchema.parse(rawId), z.boolean().parse(rawApproved)); return publish()
@@ -178,12 +217,14 @@ function registerIPC(): void {
     const config = modelConfigSchema.parse(raw)
     // Constructor validates URL security policy without issuing a network request.
     new MultimodalProvider(config, '')
-    const changedEndpoint = config.baseUrl !== saved.model.baseUrl || config.provider !== saved.model.provider
-    if (changedEndpoint && secrets.key) {
-      await secrets.clear()
-      log('warn', 'API 地址已更改，原有密钥已清除。请为新服务重新导入，避免误发密钥。')
-    }
-    saved.model = config; await store.save(saved); log('info', '模型配置已保存。'); return publish()
+    const nextSecrets = await credentialsFor(config)
+    const profiles = saved.modelProfiles.filter(profile => profile.provider !== saved.model.provider && profile.provider !== config.provider)
+    if (saved.model.provider !== config.provider) profiles.push(saved.model)
+    profiles.push(config)
+    const next = { ...saved, model: config, modelProfiles: profiles }
+    await store.save(next)
+    saved = next; secrets = nextSecrets
+    log('info', '模型配置已保存并启用。其他厂商的配置和密钥已保留。'); return publish()
   }))
   handle('study:paste-key', () => exclusive(async () => {
     assertInactive()
@@ -210,6 +251,7 @@ function registerIPC(): void {
   handle('study:clear-key', () => exclusive(async () => { assertInactive(); await secrets.clear(); log('info', '已清除当前 API Key。'); return publish() }))
   handle('study:test-model', () => exclusive(async () => {
     assertInactive()
+    if (!secrets.key && new URL(saved.model.baseUrl).protocol !== 'http:') throw new Error('请先为当前厂商配置 API Key。')
     const message = await provider().testConnection()
     log('info', message); return message
   }))
@@ -262,12 +304,27 @@ app.whenReady().then(async () => {
     ...(process.env.MODEL_TOKEN_PARAMETER ? { tokenParameter: process.env.MODEL_TOKEN_PARAMETER } : {}),
   }
   const parsedConfig = modelConfigSchema.safeParse(envModel)
-  const changedEnvironmentEndpoint = parsedConfig.success && (parsedConfig.data.baseUrl !== saved.model.baseUrl || parsedConfig.data.provider !== saved.model.provider)
-  if (parsedConfig.success) saved.model = parsedConfig.data
-  secrets = new SecretStore(store.directory, safeStorage)
+  const previousConfig = saved.model
+  secrets = new SecretStore(store.directory, safeStorage, credentialScope(previousConfig))
+  credentials.set(credentialScope(previousConfig), secrets)
   try {
-    if (changedEnvironmentEndpoint) await secrets.clear()
-    await secrets.load(process.env.MODEL_API_KEY ? validateApiKey(process.env.MODEL_API_KEY) : undefined)
+    await secrets.load()
+    // Migrate the original single credential only when its saved endpoint was recovered.
+    if (loaded.hasSavedState) {
+      const legacy = new SecretStore(store.directory, safeStorage)
+      await legacy.load()
+      if (legacy.key && !secrets.key) await secrets.set(legacy.key)
+      if (legacy.key) await legacy.clear()
+    }
+    for (const profile of saved.modelProfiles) await credentialsFor(profile)
+    if (parsedConfig.success) {
+      if (credentialScope(previousConfig) !== credentialScope(parsedConfig.data)) {
+        saved.modelProfiles = [...saved.modelProfiles.filter(profile => profile.provider !== previousConfig.provider), previousConfig]
+      }
+      saved.model = parsedConfig.data
+      secrets = await credentialsFor(saved.model)
+    }
+    if (process.env.MODEL_API_KEY) await secrets.load(validateApiKey(process.env.MODEL_API_KEY))
   } catch (error) { log('warn', (error as Error).message) }
   browser = new BrowserController(join(store.directory, 'browser-profile'), {
     allowedOrigins: fixtureOrigins(),

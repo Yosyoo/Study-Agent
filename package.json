@@ -18,7 +18,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:browser": "vitest run --config vitest.browser.config.ts",
-    "test:desktop": "node scripts/desktop-smoke.mjs",
+    "test:desktop": "node scripts/desktop-smoke.mjs && node scripts/workflow-smoke.mjs",
     "check": "npm run typecheck && npm test && npm run build",
     "browser:install": "playwright install chromium",
     "package": "npm run build && node scripts/package.mjs --dir",

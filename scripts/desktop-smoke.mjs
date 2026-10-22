@@ -1,6 +1,6 @@
 import { _electron as electron } from 'playwright'
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const profile = await mkdtemp(resolve(tmpdir(), 'study-desktop-smoke-'))
 await mkdir(resolve(root, '.local'), { recursive: true })
-const environment = { ...process.env, STUDY_AGENT_DATA_DIR: profile, MODEL_API_KEY: '', MODEL_BASE_URL: '', MODEL_NAME: '' }
+const environment = { ...process.env, STUDY_AGENT_DATA_DIR: profile, MODEL_API_KEY: '', MODEL_BASE_URL: '', MODEL_NAME: '', MODEL_PROVIDER: '', MODEL_PROTOCOL: '', MODEL_TOKEN_PARAMETER: '' }
 delete environment.ELECTRON_RUN_AS_NODE
 delete environment.ELECTRON_RENDERER_URL
 delete environment.STUDY_AGENT_LOCAL_FIXTURE
@@ -42,7 +42,7 @@ try {
   assert.equal(boundary.state.model.protocol, 'responses')
   assert.equal('apiKey' in boundary.state.model, false)
   assert.equal(boundary.state.tasks.length, 0)
-  await page.screenshot({ path: resolve(root, '.local/desktop-dashboard.png'), fullPage: true })
+  await page.screenshot({ path: resolve(root, '.local/desktop-dashboard.png'), fullPage: true, animations: 'disabled' })
 
   await page.getByRole('button', { name: '新建任务', exact: true }).click()
   const modal = page.getByRole('dialog', { name: '新建学习任务' })
@@ -79,7 +79,7 @@ try {
     assert.equal(await page.getByLabel('API Base URL', { exact: false }).inputValue(), baseUrl)
     assert.equal(await page.getByLabel('Model Name', { exact: false }).inputValue(), model)
     assert.equal((await page.evaluate(() => window.study.getState())).model.model, before.model, 'Draft selection must not change the saved connection')
-    await page.getByRole('button', { name: '保存配置', exact: true }).click()
+    await page.getByRole('button', { name: /^(保存并使用|使用此配置)$/ }).click()
     await page.locator('.busy-indicator').waitFor({ state: 'hidden' })
     const savedPreset = (await page.evaluate(() => window.study.getState())).model
     assert.equal(savedPreset.provider, provider)
@@ -88,17 +88,17 @@ try {
     assert.equal(savedPreset.tokenParameter, tokenParameter)
   }
   await page.getByRole('button', { name: 'OpenAI', exact: true }).click()
-  await page.getByRole('button', { name: '保存配置', exact: true }).click()
+  await page.getByRole('button', { name: /^(保存并使用|使用此配置)$/ }).click()
   await page.locator('.busy-indicator').waitFor({ state: 'hidden' })
-  await page.screenshot({ path: resolve(root, '.local/desktop-provider-presets.png'), fullPage: true })
+  await page.screenshot({ path: resolve(root, '.local/desktop-provider-presets.png'), fullPage: true, animations: 'disabled' })
   await page.getByLabel('Model Name', { exact: false }).fill('vision-model-test')
-  await page.getByRole('button', { name: '保存配置', exact: true }).click()
+  await page.getByRole('button', { name: /^(保存并使用|使用此配置)$/ }).click()
   await eventually(async () => (await page.evaluate(() => window.study.getState())).model.model === 'vision-model-test', 'Model configuration was not saved through the UI')
   assert.equal(await page.getByText('Temperature', { exact: true }).count(), 0)
   assert.equal(await page.getByLabel('最大输出 Token', { exact: false }).isVisible(), false)
-  await page.getByText('高级设置', { exact: true }).click()
+  await page.getByText('更多设置', { exact: true }).click()
   assert.equal(await page.getByLabel('最大输出 Token', { exact: false }).evaluate(element => element.checkValidity()), true)
-  await page.getByText('高级设置', { exact: true }).click()
+  await page.getByText('更多设置', { exact: true }).click()
   assert.equal(JSON.parse(await readFile(resolve(profile, 'state.json'), 'utf8')).model.model, 'vision-model-test')
 
   // Stub only the native OS picker; the actual main-process file read, IPC,
@@ -109,14 +109,26 @@ try {
   await desktop.evaluate(({ dialog }, file) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] })
   }, importFile)
-  await page.getByRole('button', { name: '从文件导入', exact: true }).click()
+  await page.getByText('更多设置', { exact: true }).click()
+  await page.getByRole('button', { name: '从文件导入密钥', exact: true }).click()
   await eventually(async () => (await page.evaluate(() => window.study.getState())).model.hasKey, 'Key import did not finish')
   const protectedState = await page.evaluate(() => window.study.getState())
   assert.equal(JSON.stringify(protectedState).includes(secret), false)
   if (protectedState.model.keyStorage === 'encrypted') {
-    assert.equal((await readFile(resolve(profile, 'model-key.bin'))).includes(Buffer.from(secret)), false)
+    const files = await readdir(resolve(profile, 'keys'))
+    assert.equal(files.length, 1)
+    assert.equal((await readFile(resolve(profile, 'keys', files[0]))).includes(Buffer.from(secret)), false)
   }
   await rm(importFile)
+  await page.getByRole('button', { name: 'Kimi', exact: true }).click()
+  await page.getByRole('button', { name: '使用此配置', exact: true }).click()
+  await eventually(async () => (await page.evaluate(() => window.study.getState())).model.provider === 'kimi', 'Kimi was not activated')
+  assert.equal((await page.evaluate(() => window.study.getState())).model.hasKey, false)
+  await page.getByRole('button', { name: 'OpenAI', exact: true }).click()
+  assert.equal(await page.getByLabel('Model Name', { exact: false }).inputValue(), 'vision-model-test', 'Switching must restore the previous model choice')
+  await page.getByRole('button', { name: '使用此配置', exact: true }).click()
+  await eventually(async () => (await page.evaluate(() => window.study.getState())).model.hasKey, 'Switching back lost the provider key')
+  await page.getByText('更多设置', { exact: true }).click()
   const afterEndpointChange = await page.evaluate(async () => {
     const previous = (await window.study.getState()).model
     const { hasKey, keyStorage, ...config } = previous
@@ -127,6 +139,7 @@ try {
     const { hasKey, keyStorage, ...config } = (await window.study.getState()).model
     return window.study.saveModel({ ...config, baseUrl: 'https://api.openai.com/v1' })
   })
+  assert.equal((await page.evaluate(() => window.study.getState())).model.hasKey, true, 'Restoring an endpoint must restore its own credential')
   await desktop.evaluate(({ clipboard }, value) => { clipboard.readText = () => value }, secret)
   await page.getByLabel('API Base URL', { exact: false }).fill('https://vision.example/v1')
   await page.getByRole('button', { name: '粘贴 API Key', exact: true }).click()
@@ -140,12 +153,22 @@ try {
     return window.study.saveModel({ ...config, baseUrl: 'https://api.openai.com/v1' })
   })
   await page.locator('.busy-indicator').waitFor({ state: 'hidden' })
-  await page.screenshot({ path: resolve(root, '.local/desktop-settings.png'), fullPage: true })
+  await page.screenshot({ path: resolve(root, '.local/desktop-settings.png'), fullPage: true, animations: 'disabled' })
   await page.getByRole('button', { name: '课程与任务', exact: true }).click()
   await page.getByRole('button', { name: '删除 桌面回归测试', exact: true }).click()
   await eventually(async () => (await page.evaluate(() => window.study.getState())).tasks.length === 0, 'Task was not deleted through the UI')
+  // Check the actual minimum supported desktop size, not just a full-size capture.
+  await page.getByRole('button', { name: '模型与设置', exact: true }).click()
+  await desktop.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1100, 720))
+  await page.getByRole('button', { name: 'Kimi', exact: true }).click()
+  await page.waitForFunction(() => document.querySelector('button.model-vendor[aria-label=Kimi]')?.getAttribute('aria-pressed') === 'true')
+  await page.screenshot({ path: resolve(root, '.local/desktop-settings-compact.png'), animations: 'disabled' })
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)
+  assert.equal(overflow, false, 'Settings must fit the minimum desktop width')
+  const buttonBox = await page.getByRole('button', { name: '使用此配置', exact: true }).boundingBox()
+  assert.ok(buttonBox && buttonBox.x >= 0 && buttonBox.x + buttonBox.width <= 1100, 'Primary action must remain reachable')
   assert.deepEqual(errors, [], `Renderer errors: ${errors.join('; ')}`)
-  console.log('PASS Electron desktop: sandboxed preload, task CRUD, IPC rejection, actual settings persistence, native key import/main-process encryption, endpoint key isolation, screenshots, no renderer exceptions.')
+  console.log('PASS Electron desktop: sandboxed preload, task CRUD, IPC rejection, actual settings persistence, native key import/main-process encryption, provider/endpoint key isolation and restoration, minimum-window layout, screenshots, no renderer exceptions.')
 } finally {
   if (desktop) await desktop.close()
   await rm(profile, { recursive: true, force: true })

@@ -6,7 +6,7 @@ describe('official multimodal provider presets', () => {
   it('provides all six requested vendors without obsolete text-only defaults', () => {
     expect(providerPresets.map(preset => preset.id)).toEqual(['deepseek', 'kimi', 'glm', 'openai', 'claude', 'gemini'])
     expect(new Set(providerPresets.map(preset => preset.id)).size).toBe(6)
-    expect(providerPresets.every(preset => preset.vision && preset.verifiedAt === '2026-10-20')).toBe(true)
+    expect(providerPresets.every(preset => preset.vision && preset.verifiedAt === '2026-10-22')).toBe(true)
     expect(providerPresets.map(preset => preset.model)).toEqual([
       'deepseek-flash', 'kimi-k3', 'glm-5.3-flash', 'gpt-6.1-sol', 'claude-sonnet-5-5', 'gemini-3.8-flash',
     ])

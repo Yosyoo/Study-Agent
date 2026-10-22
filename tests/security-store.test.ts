@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { isTrustedRendererUrl, redact, validateApiKey } from '../src/main/security'
-import { emptyState, SecretStore, StateStore } from '../src/main/store'
+import { credentialScope, emptyState, SecretStore, StateStore } from '../src/main/store'
+import { defaultModelConfig } from '../src/shared/contracts'
 
 describe('IPC boundary and diagnostics', () => {
   it('only accepts the precise local renderer, denying another path, remote origin or injected query', () => {
@@ -28,6 +29,44 @@ describe('IPC boundary and diagnostics', () => {
 })
 
 describe('durable state', () => {
+  it('keeps credentials isolated by provider and endpoint, and restores them when switching back', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'study-credential-scopes-'))
+    const encryption = {
+      isEncryptionAvailable: () => true,
+      encryptString: (text: string) => Buffer.from(Buffer.from(text).map(byte => byte ^ 137)),
+      decryptString: (bytes: Buffer) => Buffer.from(bytes.map(byte => byte ^ 137)).toString(),
+    }
+    try {
+      const original = credentialScope(defaultModelConfig)
+      expect(credentialScope({ ...defaultModelConfig, baseUrl: defaultModelConfig.baseUrl + '/' })).toBe(original)
+      const changedUrl = credentialScope({ ...defaultModelConfig, baseUrl: 'https://other.example/v1' })
+      const changedProvider = credentialScope({ ...defaultModelConfig, provider: 'custom' })
+      expect(new Set([original, changedUrl, changedProvider]).size).toBe(3)
+      const first = new SecretStore(directory, encryption, original)
+      await first.set('first-private-key')
+      const second = new SecretStore(directory, encryption, changedUrl)
+      await second.load(); expect(second.key).toBe('')
+      await second.set('second-private-key')
+      const restored = new SecretStore(directory, encryption, original)
+      await restored.load(); expect(restored.key).toBe('first-private-key')
+      await second.clear()
+      await restored.load(); expect(restored.key).toBe('first-private-key')
+      expect((await readFile(join(directory, 'keys', `${original}.bin`))).toString()).not.toContain('first-private-key')
+    } finally { await rm(directory, { recursive: true, force: true }) }
+  })
+
+  it('persists separate provider choices without erasing tasks or selecting another provider on restart', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'study-model-profiles-'))
+    try {
+      const state = emptyState()
+      state.modelProfiles = [state.model, { ...state.model, provider: 'kimi', model: 'chosen-kimi-model', baseUrl: 'https://api.moonshot.ai/v1' }]
+      const store = new StateStore(directory)
+      await store.save(state)
+      const { state: restored } = await store.load()
+      expect(restored.model).toEqual(state.model)
+      expect(restored.modelProfiles).toEqual(state.modelProfiles)
+    } finally { await rm(directory, { recursive: true, force: true }) }
+  })
   it('migrates the removed temperature field without losing a saved provider or task', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'study-store-migration-'))
     try {

@@ -18,8 +18,8 @@ interface PageHints { password: boolean; exercise: boolean; chapterLinks: number
 
 export function detectPageType(url: string, hints: PageHints, videos: number): { pageType: PageType; confidence: number } {
   if (hints.password || /passport2\.chaoxing\.com|\/login(?:\b|\/)/i.test(url)) return { pageType: 'login', confidence: 0.96 }
-  if (videos > 0) return { pageType: 'video', confidence: 0.98 }
   if (hints.exercise || /\/(?:work|exam)\/(?:do|answer|phone|test)/i.test(url)) return { pageType: 'exercise', confidence: hints.exercise ? 0.9 : 0.72 }
+  if (videos > 0) return { pageType: 'video', confidence: 0.98 }
   if (hints.chapterLinks > 0 || hints.headingKind === 'chapters' || /\/mycourse\/(?:studentstudy|studentcourse)/i.test(url)) return { pageType: 'chapters', confidence: 0.8 }
   if (hints.courseLinks > 1 || hints.headingKind === 'courses' || /\/visit\/courses(?:\/|\b)/i.test(url)) return { pageType: 'courses', confidence: 0.8 }
   return { pageType: 'unknown', confidence: 0.1 }
@@ -32,6 +32,7 @@ export class BrowserController implements BrowserPort {
   private frameIds = new WeakMap<Frame, string>()
   private pending: Promise<unknown> = Promise.resolve()
   private lastObservation: Observation | null = null
+  private navigationFailed = false
 
   constructor(private readonly profileDir: string, private readonly options: BrowserOptions = {}) {}
 
@@ -95,13 +96,18 @@ export class BrowserController implements BrowserPort {
         })
         this.attach(this.context.pages()[0] ?? await this.context.newPage())
       }
-      await this.navigate(url)
+      if (this.currentPage?.isClosed() || !this.currentPage) {
+        this.attach(this.context.pages().find(page => !page.isClosed()) ?? await this.context.newPage())
+      }
+      if (this.navigationFailed || this.currentPage?.url() !== new URL(url).href) await this.navigate(url)
+      await this.page().bringToFront()
     })
   }
 
   private async navigate(url: string, signal?: AbortSignal): Promise<void> {
     this.assertUrl(url)
     const page = this.page()
+    this.navigationFailed = true
     // GET navigation is idempotent; an interrupted attempt gets one bounded retry.
     for (let attempt = 0; attempt < 2; attempt++) {
       signal?.throwIfAborted()
@@ -110,6 +116,7 @@ export class BrowserController implements BrowserPort {
         if (response && response.status() >= 400) throw new Error(`HTTP ${response.status()}`)
         this.assertUrl(page.url())
         this.lastObservation = null
+        this.navigationFailed = false
         return
       } catch (error) {
         if (attempt === 1 || page.isClosed()) throw new Error(`页面加载失败：${error instanceof Error ? error.message.slice(0, 250) : '未知导航错误'}`)
@@ -316,8 +323,16 @@ export class BrowserController implements BrowserPort {
     const page = this.page()
     this.assertUrl(page.url())
     const age = Date.now() - observation.capturedAt
-    if (!this.lastObservation || this.lastObservation.id !== observation.id || age < 0 || age > (this.options.observationMaxAgeMs ?? 30_000)) throw new Error('观察结果已过期，请重新截图并确认操作。')
+    if (!this.lastObservation || this.lastObservation.id !== observation.id || age < 0 || age > 5 * 60_000) throw new Error('观察结果已过期，请重新截图并确认操作。')
     if (page.url() !== observation.url || await this.fingerprint(page) !== observation.fingerprint) throw new Error('页面或控件位置已变化。操作已取消，请重新观察。')
+    if (age > (this.options.observationMaxAgeMs ?? 30_000)) {
+      // Slow model calls and human review can outlive the fresh-screenshot window.
+      // Renew only if BOTH the controls and exact pixels still match the approved view.
+      const refreshed = await this.capture()
+      if (refreshed.fingerprint !== observation.fingerprint || refreshed.screenshot !== observation.screenshot) {
+        throw new Error('确认期间页面画面已变化，已拒绝操作。请重新观察并确认。')
+      }
+    }
     return page
   }
 

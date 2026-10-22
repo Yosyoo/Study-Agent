@@ -2,7 +2,7 @@ import { createServer, type Server } from 'node:http'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { BrowserController } from '../src/main/browser/controller'
 
 let server: Server
@@ -13,6 +13,8 @@ let moveButton = false
 let replaceLabel = false
 let typed = ''
 let clicks = 0
+let failNavigation = true
+let navigationRequests = 0
 const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
 
 beforeAll(async () => {
@@ -25,6 +27,17 @@ beforeAll(async () => {
     if (url.pathname === '/clicked') { clicks++; response.end('ok'); return }
     if (url.pathname === '/typed') { typed = url.searchParams.get('value') ?? ''; response.end('ok'); return }
     response.setHeader('Content-Type', 'text/html; charset=utf-8')
+    if (url.pathname === '/retry-navigation') {
+      navigationRequests++
+      response.writeHead(failNavigation ? 503 : 200)
+      response.end('<!doctype html><title>Retry fixture</title><h1>Course</h1>'); return
+    }
+    if (url.pathname === '/stable-action') {
+      response.end(`<!doctype html><button style="position:absolute;left:20px;top:20px;width:140px;height:40px" onclick="fetch('/clicked');this.textContent='已点击'">打开章节</button><p style="margin-top:100px" id="content">原始页面内容</p><script>setInterval(async()=>{const s=await fetch('/state').then(r=>r.json());if(s.replaceLabel)content.textContent='新的页面内容'},50)</script>`); return
+    }
+    if (url.pathname === '/mixed-exercise') {
+      response.end('<!doctype html><div class="question"><label><input type="radio">截图中的题目选项</label></div><video style="width:400px;height:240px"></video>'); return
+    }
     if (url.pathname === '/media') {
       response.end(`<!doctype html><style>body{margin:0}video{width:400px;height:240px}</style><video muted autoplay></video><canvas hidden width="160" height="90"></canvas><script>
         const canvas=document.querySelector('canvas'), video=document.querySelector('video'), context=canvas.getContext('2d');
@@ -198,5 +211,46 @@ describe('real Chromium browser controller against local fixtures', () => {
     await browser.close()
     expect(browser.isOpen).toBe(false)
     await expect(browser.observe()).rejects.toThrow(/未打开/)
+  })
+
+  it('renews an unchanged screenshot after slow model inference without dispatching duplicate clicks', async () => {
+    await browser.open(origin + '/stable-action')
+    const observation = await browser.observe()
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 45_000)
+    const previousClicks = clicks
+    try {
+      const result = await browser.execute({ type: 'click', x: 70, y: 50 }, observation)
+      expect(result.changed).toBe(true)
+      expect(clicks).toBe(previousClicks + 1)
+    } finally { clock.mockRestore() }
+  })
+
+  it('rejects an old screenshot when pixels changed even though controls stayed in place', async () => {
+    await browser.open(origin + '/stable-action')
+    const observation = await browser.observe()
+    replaceLabel = true
+    await sleep(200)
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 45_000)
+    const previousClicks = clicks
+    try {
+      await expect(browser.execute({ type: 'click', x: 70, y: 50 }, observation)).rejects.toThrow('画面已变化')
+      expect(clicks).toBe(previousClicks)
+    } finally { clock.mockRestore(); replaceLabel = false }
+  })
+
+  it('prioritizes a visible exercise over a retained video on the same page', async () => {
+    await browser.open(origin + '/mixed-exercise')
+    const observation = await browser.observe()
+    expect(observation.videos.length).toBe(1)
+    expect(observation.pageType).toBe('exercise')
+  })
+
+  it('allows reopening a failed URL after bounded navigation retries were exhausted', async () => {
+    await expect(browser.open(origin + '/retry-navigation')).rejects.toThrow('页面加载失败')
+    expect(navigationRequests).toBe(2)
+    failNavigation = false
+    await browser.open(origin + '/retry-navigation')
+    expect(navigationRequests).toBe(3)
+    expect((await browser.observe()).title).toBe('Retry fixture')
   })
 })

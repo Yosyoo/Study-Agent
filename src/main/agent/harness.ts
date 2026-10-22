@@ -4,6 +4,7 @@ import {
   type BrowserPort, type ModelProvider, type Observation, type StudyTask,
 } from '../../shared/contracts'
 import { VideoTracker } from '../browser/video-monitor'
+import { redact } from '../security'
 
 export interface HarnessLimits {
   maxSteps: number; maxModelCalls: number; maxRuntimeMs: number; pollIntervalMs: number
@@ -81,7 +82,7 @@ export class AgentHarness {
     if (TERMINAL.has(this.state.phase)) return
     this.invalidate()
     this.clearRuntimeTimer()
-    this.patch({ phase: 'stopped', pending: null, message: '任务已停止。浏览器保留，便于你继续手动操作。' })
+    this.patch({ phase: 'stopped', endedAt: Date.now(), pending: null, message: '任务已停止。浏览器保留，便于你继续手动操作。' })
     this.log('info', '用户停止任务。')
   }
 
@@ -125,8 +126,8 @@ export class AgentHarness {
       const controller = new AbortController()
       this.controller = controller
       try { await this.run(generation, controller.signal) }
-      catch {
-        if (this.current(generation)) this.intervene('浏览器或模型调用失败。请检查浏览器、网络和模型配置后恢复。')
+      catch (error) {
+        if (this.current(generation)) this.intervene(`任务已暂停：${redact(error instanceof Error ? error.message : '浏览器或模型调用失败。')} 修复后可恢复；修改模型配置前请先停止任务。`)
       } finally { if (this.controller === controller) this.controller = null }
     }
   }
@@ -146,7 +147,7 @@ export class AgentHarness {
       if (!this.current(generation) || !this.withinBudget()) return
       this.patch({ observation, videos: this.videoTracker.update(observation.videos), decision: null })
       if (observation.pageType === 'login') { this.intervene('页面需要登录或平台验证。请在浏览器中手动完成后恢复。'); return }
-      if (observation.videos.length > 0) { await this.monitor(observation, generation, signal); return }
+      if (observation.videos.length > 0 && observation.pageType !== 'exercise') { await this.monitor(observation, generation, signal); return }
       if (this.state.modelCalls >= this.limits.maxModelCalls) { this.failBudget('已达到模型调用轮数上限，请人工核对进度。'); return }
       this.patch({ phase: 'thinking', modelCalls: this.state.modelCalls + 1, message: '模型正在直接阅读截图并生成受控建议…' })
       const rawDecision = await this.options.provider.decide({ goal: this.task!.goal, observation, history: [...this.history], signal })
@@ -199,8 +200,8 @@ export class AgentHarness {
     // No automatic retries of mutations: a timed-out click may already have succeeded.
     let result
     try { result = await this.options.browser.execute(action, observation, signal) }
-    catch {
-      if (this.current(generation)) this.intervene('操作未能安全执行，可能是截图过期、页面变化或控件不可用。请重新观察后恢复。')
+    catch (error) {
+      if (this.current(generation)) this.intervene(`操作未执行或未能验证：${redact(error instanceof Error ? error.message : '控件不可用。')} 请核对浏览器后恢复；不会自动重复这次操作。`)
       return false
     }
     if (!this.current(generation) || !this.withinBudget()) return false
@@ -262,9 +263,9 @@ export class AgentHarness {
   private log(level: 'info' | 'warn' | 'error', message: string): void { this.options.log(level, message) }
   private remember(message: string): void { this.history.push(message.slice(0, 1000)); this.history = this.history.slice(-8) }
   private intervene(message: string): void { this.patch({ phase: 'needs_user', pending: null, message }); this.log('warn', message) }
-  private complete(message: string): void { this.clearRuntimeTimer(); this.patch({ phase: 'completed', pending: null, message }); this.log('info', message) }
+  private complete(message: string): void { this.clearRuntimeTimer(); this.patch({ phase: 'completed', endedAt: Date.now(), pending: null, message }); this.log('info', message) }
   private clearRuntimeTimer(): void { if (this.runtimeTimer) clearTimeout(this.runtimeTimer); this.runtimeTimer = null }
-  private failBudget(message: string): void { this.invalidate(); this.clearRuntimeTimer(); this.patch({ phase: 'error', pending: null, message }); this.log('warn', message) }
+  private failBudget(message: string): void { this.invalidate(); this.clearRuntimeTimer(); this.patch({ phase: 'error', endedAt: Date.now(), pending: null, message }); this.log('warn', message) }
   private withinBudget(): boolean {
     if (this.state.startedAt !== null && Date.now() - this.state.startedAt >= this.limits.maxRuntimeMs) { this.failBudget('任务已达到运行时间上限，请检查进度后重新开始。'); return false }
     return true
