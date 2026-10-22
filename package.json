@@ -19,6 +19,8 @@
     "test:watch": "vitest",
     "test:browser": "vitest run --config vitest.browser.config.ts",
     "test:desktop": "node scripts/desktop-smoke.mjs && node scripts/workflow-smoke.mjs",
+    "test:visual": "node scripts/visual-review.mjs",
+    "icons:generate": "node scripts/generate-icon.mjs",
     "check": "npm run typecheck && npm test && npm run build",
     "browser:install": "playwright install chromium",
     "package": "npm run build && node scripts/package.mjs --dir",
@@ -50,6 +52,7 @@
   "build": {
     "appId": "app.studyagent.desktop",
     "productName": "Study Agent",
+    "icon": "build/icon.png",
     "directories": {
       "output": "release"
     },

@@ -139,11 +139,18 @@ npm test
 npm run build
 npm run test:browser
 npm run test:desktop
+npm run test:visual
 ```
 
 `npm test` 测试模型输出、重试、取消、预算、状态机、视频分类、域名和坐标边界、持久化与日志脱敏。`test:browser` 启动真实 headless Chromium，使用本地页面和明确模拟的 HTTP 模型响应，验证截图→模型请求→确认→真实点击/导航→新截图→答案核对。它还验证 iframe 视频真实时间推进、敏感控件拒绝、隐藏播放器过滤及过期截图保护。**这些测试不能验证真实模型的视觉推理质量。**
 
 `test:desktop` 包含界面和工作流两个脚本：验证 preload 隔离、任务增删、六家配置与密钥切换/恢复、最小窗口布局，以及通过真实本地 HTTP 服务验证读图挑战、401 错误、旧密钥迁移和重启恢复。开发版还验证任务地址、加载中停止和无 Key 视频监测。使用独立临时 profile 与端口 4178；不会使用真实账号或调用付费端点。构建后的应用可指定 `STUDY_AGENT_SMOKE_EXECUTABLE` 运行；本地课程 fixture 分支替换为打包版禁用该调试入口的验证。截图保存于 `.local/desktop-*.png`。
+
+`test:visual` 在真实 Electron 的独立测试配置中检查 24 个界面状态，截图与检查清单保存在 `.local/ui-review/`。它覆盖首页、六家模型、任务列表、视频状态、题目确认、错误提示、截图放大和最小窗口，并验证导航滚动复位、弹窗焦点返回、背景不可交互、图片加载和横向溢出。展示数据是明确标识的本地视觉测试资料；不访问真实平台，不调用模型，也不写入用户配置。运行前需要 `npm run build` 和已安装的 Playwright Chromium。
+
+界面采用浅色导航和学习蓝强调色，模型页只展开常用设置；浏览器截图与题目来源图均可放大并切换原始尺寸。视觉约定和设计自审见 [UI-DESIGN.md](docs/UI-DESIGN.md)。本地厂商标识来自 [Lobe Icons](https://github.com/lobehub/lobe-icons)，MIT 许可随构建输出保存在 `out/renderer/licenses/lobe-icons.txt`。
+
+应用图标源文件为 `build/icon.svg`；修改后运行 `npm run icons:generate`，由本地 Chromium 生成 `build/icon.png`。打包工具将 PNG 转为目标平台图标。
 
 ## 打包与分发
 

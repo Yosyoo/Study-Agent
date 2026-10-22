@@ -4,7 +4,7 @@ import {
   Check,
   ChevronDown,
   FolderOpen,
-  KeyRound,
+  ClipboardPaste,
   LoaderCircle,
   Settings2,
   ShieldCheck,
@@ -17,6 +17,7 @@ import {
   type PublicModelConfig,
 } from "../../shared/contracts";
 import { applyProviderPreset, providerPresets } from "../../shared/providers";
+import { ProviderIcon } from "./Visuals";
 
 type Props = {
   state: AppState;
@@ -157,14 +158,6 @@ export function ModelSettings({ state, blocked, busy, run }: Props) {
   }
   return (
     <div className="model-settings">
-      <div className="model-active-summary">
-        <span className="small-dot" />
-        当前使用{" "}
-        <strong>
-          {vendors.find((item) => item.id === state.model.provider)?.label}
-        </strong>
-        <span className="model-active-name">{state.model.model}</span>
-      </div>
       {lockedByTask && (
         <div className="model-task-notice" role="status">
           当前任务尚未结束。停止任务后可以修改模型配置。
@@ -172,6 +165,7 @@ export function ModelSettings({ state, blocked, busy, run }: Props) {
       )}
       <div className="model-layout">
         <nav className="model-vendors" aria-label="选择模型厂商">
+          <h2>模型服务</h2>
           {vendors.map((item) => {
             const saved = state.modelProfiles.find(
               (profile) => profile.provider === item.id,
@@ -187,17 +181,10 @@ export function ModelSettings({ state, blocked, busy, run }: Props) {
                 disabled={blocked}
                 onClick={() => setSelected(item.id)}
               >
-                <span
-                  className={`vendor-symbol vendor-${item.id}`}
-                  aria-hidden="true"
-                >
-                  {item.id === "custom"
-                    ? "+"
-                    : item.label.slice(0, item.id === "deepseek" ? 2 : 1)}
-                </span>
+                <ProviderIcon provider={item.id} />
                 <span className="vendor-copy">
                   <strong>{item.label}</strong>
-                  <span>{saved?.hasKey ? "已配置密钥" : "待配置"}</span>
+                  {saved?.hasKey && <span>已添加密钥</span>}
                 </span>
                 {active && (
                   <Check
@@ -209,21 +196,23 @@ export function ModelSettings({ state, blocked, busy, run }: Props) {
               </button>
             );
           })}
-          <p className="vendor-footnote">
-            每家配置独立保存，切换后可随时回来。
-          </p>
         </nav>
-        <form className="panel model-editor" onSubmit={save}>
+        <form className="model-editor" onSubmit={save}>
           <div className="model-editor-heading">
+            <ProviderIcon provider={selected} />
             <div>
               <h2>{vendor.label}</h2>
               <p>
                 {preset
-                  ? "已预填官方接口和视觉模型，添加密钥即可使用。"
+                  ? "默认配置已就绪，添加 API Key 即可连接。"
                   : "连接支持图片输入的模型服务。"}
               </p>
             </div>
-            {isCurrent && <span className="badge badge-teal">当前使用</span>}
+            {isCurrent && (
+              <span className="badge badge-blue">
+                {keyConfigured ? "当前使用" : "当前配置"}
+              </span>
+            )}
           </div>
           <fieldset disabled={disabled} className="model-editor-fields">
             {selected === "custom" && (
@@ -250,7 +239,6 @@ export function ModelSettings({ state, blocked, busy, run }: Props) {
             </label>
             <div className="model-key">
               <div className="model-key-title">
-                <KeyRound size={15} />
                 <strong>API Key</strong>
                 <span
                   className={`key-status ${keyConfigured ? "configured" : ""}`}
@@ -266,9 +254,10 @@ export function ModelSettings({ state, blocked, busy, run }: Props) {
                 </span>
                 <button
                   type="button"
-                  className="button secondary compact"
+                  className={`button ${keyConfigured ? "secondary" : "primary"} compact`}
                   onClick={() => importKey("clipboard")}
                 >
+                  <ClipboardPaste size={14} />
                   {keyConfigured ? "更换密钥" : "粘贴 API Key"}
                 </button>
               </div>
@@ -277,7 +266,7 @@ export function ModelSettings({ state, blocked, busy, run }: Props) {
                   ? profile?.keyStorage === "encrypted"
                     ? "已加密保存在本机。切换厂商时保留。"
                     : "当前密钥仅在本次应用运行期间有效。"
-                  : "请使用当前服务商的 API 密钥。"}
+                  : "密钥仅在本机读取和加密保存。"}
               </p>
             </div>
             <details
@@ -419,7 +408,9 @@ export function ModelSettings({ state, blocked, busy, run }: Props) {
               {dirty
                 ? "修改尚未保存"
                 : isCurrent
-                  ? "已启用此配置"
+                  ? keyConfigured
+                    ? "已启用此配置"
+                    : "添加密钥后可测试连接"
                   : "可切换到此配置"}
             </span>
             <div>
@@ -434,16 +425,16 @@ export function ModelSettings({ state, blocked, busy, run }: Props) {
                 ) : (
                   <Activity size={15} />
                 )}
-                测试连接
+                {busy === "testModel" ? "正在验证图片理解…" : "测试连接"}
               </button>
               <button
                 type="submit"
                 value="save"
-                className="button primary"
+                className={`button ${isCurrent ? "secondary" : "primary"}`}
                 disabled={disabled || isCurrent}
               >
                 <Check size={15} />
-                {isCurrent ? "正在使用" : dirty ? "保存并使用" : "使用此配置"}
+                {isCurrent ? "已设为当前" : dirty ? "保存并使用" : "使用此配置"}
               </button>
             </div>
           </div>

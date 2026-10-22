@@ -11,10 +11,14 @@
 | `npm run test:browser` | 2 个文件，20 项通过 | 真实 headless Chromium，本地 HTTP fixture 与脚本模型响应 |
 | `npm run build` | 通过 | Electron main、sandboxed preload CJS、React/Tailwind renderer |
 | `npm run test:desktop` | 通过 | 两个脚本：真实 Electron 的配置/密钥往返恢复、最小窗口布局、实际 HTTP 视觉挑战与 401、迁移/重启、任务 URL、启动取消和无 Key 视频监测 |
+| `npm run test:visual` | 24 个状态通过 | 真实 Electron、隔离数据：页面布局、六厂商标识、最小窗口、弹窗错误与焦点、截图放大和原始尺寸 |
 | `npm run package` | 通过 | 原生 darwin/arm64 `.app`，包含 Chromium |
 | 指定 `STUDY_AGENT_SMOKE_EXECUTABLE` 的桌面测试 | 通过 | 打包后的 `Study Agent.app`，独立临时 profile |
+| 指定 `STUDY_AGENT_SMOKE_EXECUTABLE` 的视觉检查 | 24 个状态通过 | 使用新 `.app` 再次检查实际界面；原生图标与包内厂商素材许可证已核对 |
 | 打包资源中的 Chromium | 通过 | 独立启动、创建页面、真实按钮点击，未依赖开发浏览器缓存 |
 | 界面截图检查 | 通过 | `.local/desktop-dashboard.png`、`.local/desktop-provider-presets.png`、`.local/desktop-settings-compact.png`、`.local/desktop-model-error.png`；实际窗口 1440×940 与 1100×720 |
+
+本轮界面按 Frontend Design skill 重构：浅色导航、统一字号和间距、浏览器观察主区域、简化厂商编辑、题目阅读与原图对照。新增 `.local/ui-review/` 的 24 个截图状态及 JSON 检查清单；其中课程、视频、题目和日志为明确标识的本地视觉 fixture。它验证显示和交互，不证明实站识别或模型推理。应用图标、学习插画与厂商 SVG 均在本地加载，厂商素材的 MIT 许可证随应用构建输出。设计说明见 [UI-DESIGN.md](UI-DESIGN.md)。
 
 浏览器本地集成测试覆盖：JPEG 截图与 1280×800 映射、iframe 视频 `currentTime` 实际推进、iframe 输入、单次点击、页面结构/同位置标签变化后拒绝旧确认、敏感控件与按键保护、已取消操作不派发、隐藏播放器过滤、多个任务点保守完成判断；超过 30 秒但像素未变时续验，像素变化时拒绝；练习优先于残留视频；503 有限重试后可重新打开相同地址。
 
@@ -64,6 +68,6 @@
 2. 在 Windows x64 和 Intel Mac 上执行同样的检查与安装验收。
 3. 在已有三协议和六家预设基础上补充真实厂商端点验收，持续更新预设核验日期，改善不兼容端点的诊断。
 4. 在有稳定真实样本后添加课程导入与明确的任务点数据模型，保留人工监督边界。
-5. 完成图标、签名、公证、安装器与更新机制后再做正式分发。
+5. 完成签名、公证、安装器与更新机制后再做正式分发；本轮已提供应用图标。
 
 本轮问题、复现条件、修复位置与剩余限制见 [REVIEW-2026-10-22.md](REVIEW-2026-10-22.md)。

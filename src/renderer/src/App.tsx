@@ -6,7 +6,6 @@ import {
   type ReactNode,
 } from "react";
 import {
-  Activity,
   ArrowRight,
   BookOpen,
   Bot,
@@ -16,8 +15,8 @@ import {
   CircleHelp,
   ExternalLink,
   Eye,
+  Expand,
   FileQuestion,
-  GraduationCap,
   LayoutDashboard,
   LoaderCircle,
   Monitor,
@@ -49,6 +48,7 @@ import {
   type VideoState,
 } from "../../shared/contracts";
 import { ModelSettings } from "./ModelSettings";
+import { ProviderIcon, StudyIllustration, StudyMark } from "./Visuals";
 
 type View = "dashboard" | "tasks" | "analysis" | "activity" | "settings";
 const phaseLabels: Record<AgentPhase, string> = {
@@ -228,7 +228,10 @@ export default function App() {
   const [notice, setNotice] = useState<string | null>(null);
   const [taskModal, setTaskModal] = useState(false);
   const [browserModal, setBrowserModal] = useState(false);
+  const [preview, setPreview] = useState<Observation | null>(null);
+  const modalOpener = useRef<HTMLElement | null>(null);
   const [now, setNow] = useState(Date.now());
+  const main = useRef<HTMLElement>(null);
   const api = window.study;
   const desktop = Boolean(api);
   const agent = state.agent;
@@ -241,6 +244,28 @@ export default function App() {
     state.tasks.find((t) => t.id === selectedId) ??
     state.tasks[0];
   const pending = agent.pending;
+  const modalOpen = taskModal || browserModal || Boolean(preview);
+
+  function openDialog(
+    kind: "task" | "browser" | "preview",
+    observation?: Observation,
+  ) {
+    modalOpener.current =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    setError(null);
+    if (kind === "task") setTaskModal(true);
+    else if (kind === "browser") setBrowserModal(true);
+    else if (observation) setPreview(observation);
+  }
+
+  useEffect(() => {
+    if (!modalOpen && modalOpener.current?.isConnected) {
+      modalOpener.current.focus();
+      modalOpener.current = null;
+    }
+  }, [modalOpen]);
 
   useEffect(() => {
     if (!api) return;
@@ -265,6 +290,9 @@ export default function App() {
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
   }, []);
+  useEffect(() => {
+    main.current?.scrollTo({ top: 0 });
+  }, [view]);
   useEffect(() => {
     if (!notice) return;
     const timer = setTimeout(() => setNotice(null), 6000);
@@ -303,30 +331,28 @@ export default function App() {
     ? Math.max(0, Math.round(((agent.endedAt ?? now) - agent.startedAt) / 1000))
     : 0;
   const heading = {
-    dashboard: ["学习工作台", "观察、理解与操作，每一步都在掌握之中。"],
-    tasks: ["课程与任务", "为每一段学习设定清晰的目标。"],
-    analysis: ["AI 题目分析", "从页面截图理解题目，结合解析自主判断。"],
-    activity: ["运行日志", "追踪 Agent 的每一步决策与执行结果。"],
-    settings: ["模型与设置", "连接你的多模态模型，保持凭据安全。"],
+    dashboard: ["学习工作台", "打开课程，开始今天的学习。"],
+    tasks: ["课程与任务", "管理课程页面与每次学习的具体目标。"],
+    analysis: ["AI 题目分析", "对照原题，阅读思路，确认你的判断。"],
+    activity: ["运行日志", "查看页面观察、操作结果和需要处理的问题。"],
+    settings: ["模型与设置", "选择服务商，连接你的 AI。"],
   }[view];
 
   return (
     <div className="app-shell">
-      <aside className="sidebar">
+      <aside className="sidebar" inert={modalOpen}>
         <div className="brand">
-          <div className="brand-mark">
-            <GraduationCap size={24} />
-          </div>
-          <div>
-            Study Agent<span>YOUR LEARNING COPILOT</span>
-          </div>
+          <StudyMark />
+          <span>Study Agent</span>
         </div>
-        <div className="workspace-label">个人工作空间</div>
+        <div className="workspace-label">我的学习空间</div>
         <nav aria-label="主导航">
           {navItems.map((item) => (
             <button
               key={item.id}
+              aria-label={item.label}
               className={`nav-item ${view === item.id ? "selected" : ""}`}
+              aria-current={view === item.id ? "page" : undefined}
               onClick={() => setView(item.id)}
             >
               <item.icon size={18} />
@@ -337,27 +363,25 @@ export default function App() {
             </button>
           ))}
         </nav>
-        <div className="sidebar-section-label">当前平台</div>
-        <div className="platform-item">
-          <span className="platform-logo">学</span>
-          <div>
-            超星学习通<span>网页版 · 第一阶段适配</span>
-          </div>
-          <span
-            className={`connection-dot ${state.browserOpen ? "connected" : ""}`}
-            title={state.browserOpen ? "浏览器已打开" : "浏览器未打开"}
-          />
-        </div>
         <div className="sidebar-bottom">
-          <div className="safety-note">
-            <ShieldCheck size={18} />
-            <div>
-              <strong>登录会话保存在本机</strong>
-              <p>浏览器操作前会请求你确认</p>
-            </div>
-          </div>
+          <button
+            className="sidebar-model"
+            onClick={() => setView("settings")}
+            aria-label="查看当前模型配置"
+          >
+            <ProviderIcon provider={state.model.provider} />
+            <span>
+              <strong title={state.model.model}>{state.model.model}</strong>
+              <small>
+                {state.model.hasKey ? "当前使用的模型" : "尚未添加密钥"}
+              </small>
+            </span>
+            <ChevronRight size={14} />
+          </button>
           <button
             className={`nav-item ${view === "settings" ? "selected" : ""}`}
+            aria-label="模型与设置"
+            aria-current={view === "settings" ? "page" : undefined}
             onClick={() => setView("settings")}
           >
             <Settings2 size={18} />
@@ -365,19 +389,18 @@ export default function App() {
             {!state.model.hasKey && <span className="setup-dot" />}
           </button>
           <div className="sidebar-footer">
-            <span className="avatar">S</span>
-            <div>
-              本地工作空间<span>Study Agent v{state.version}</span>
-            </div>
-            <span className="local-indicator" />
+            <ShieldCheck size={14} />
+            <span>数据保存在本机</span>
+            <span>v{state.version}</span>
           </div>
         </div>
       </aside>
-      <main className="main-shell">
+      <main ref={main} className="main-shell" inert={modalOpen}>
         <header className="topbar">
-          <div className="breadcrumb">
-            工作空间 <ChevronRight size={13} />
-            <span>{heading[0]}</span>
+          <div className="platform-context">
+            <span className="platform-logo">学</span>
+            <span>超星学习通</span>
+            <span className="platform-edition">网页版</span>
           </div>
           <div className="topbar-right">
             {view !== "dashboard" &&
@@ -386,7 +409,16 @@ export default function App() {
                 agent.phase === "paused" ||
                 agent.phase === "needs_user") && (
                 <>
-                  <Badge tone="teal">{phaseLabels[agent.phase]}</Badge>
+                  <Badge
+                    tone={
+                      agent.phase === "awaiting_confirmation" ||
+                      agent.phase === "needs_user"
+                        ? "amber"
+                        : "blue"
+                    }
+                  >
+                    {phaseLabels[agent.phase]}
+                  </Badge>
                   <IconButton
                     label={active ? "暂停当前任务" : "恢复当前任务"}
                     disabled={!desktop}
@@ -412,12 +444,9 @@ export default function App() {
               className={`connection-dot ${state.browserOpen ? "connected" : ""}`}
             />
             {state.browserOpen ? "浏览器已连接" : "浏览器未连接"}
-            <span className="topbar-divider" />
-            <ShieldCheck size={14} />
-            <span>本地运行</span>
           </div>
         </header>
-        <div className="page-content">
+        <div className={`page-content page-${view}`}>
           {!desktop && (
             <div className="banner warning">
               <Monitor size={18} />
@@ -430,7 +459,7 @@ export default function App() {
               </div>
             </div>
           )}
-          {error && (
+          {error && !modalOpen && (
             <div className="banner error" role="alert">
               <AlertCircle size={18} />
               <div>
@@ -453,7 +482,6 @@ export default function App() {
           )}
           <div className="page-heading">
             <div>
-              <div className="eyebrow">STUDY WORKSPACE</div>
               <h1>{heading[0]}</h1>
               <p>{heading[1]}</p>
             </div>
@@ -462,17 +490,17 @@ export default function App() {
                 <button
                   className="button secondary"
                   disabled={blocked}
-                  onClick={() => setBrowserModal(true)}
+                  onClick={() => openDialog("browser")}
                 >
                   <ExternalLink size={16} />
                   {state.browserOpen ? "前往学习页面" : "打开学习浏览器"}
                 </button>
               )}
-              {view !== "settings" && (
+              {(view === "dashboard" || view === "tasks") && (
                 <button
                   className="button primary"
                   disabled={blocked}
-                  onClick={() => setTaskModal(true)}
+                  onClick={() => openDialog("task")}
                 >
                   <Plus size={16} />
                   新建任务
@@ -483,82 +511,6 @@ export default function App() {
 
           {view === "dashboard" && (
             <>
-              {!state.tasks.length && (
-                <section className="panel getting-started">
-                  <h2>开始一次学习辅助</h2>
-                  <p>连接模型，打开课程，再创建一个具体的学习任务。</p>
-                  <div className="getting-started-actions">
-                    <button
-                      disabled={blocked}
-                      onClick={() => setView("settings")}
-                    >
-                      <span>1</span>
-                      <strong>
-                        {state.model.hasKey ? "模型已配置" : "连接模型"}
-                      </strong>
-                      <small>选择厂商，添加 API Key</small>
-                      <ChevronRight size={16} />
-                    </button>
-                    <button
-                      disabled={blocked}
-                      onClick={() => setBrowserModal(true)}
-                    >
-                      <span>2</span>
-                      <strong>
-                        {state.browserOpen ? "浏览器已打开" : "打开学习浏览器"}
-                      </strong>
-                      <small>手动登录并进入课程</small>
-                      <ChevronRight size={16} />
-                    </button>
-                    <button
-                      disabled={blocked}
-                      onClick={() => setTaskModal(true)}
-                    >
-                      <span>3</span>
-                      <strong>创建学习任务</strong>
-                      <small>选择页面，说明学习目标</small>
-                      <ChevronRight size={16} />
-                    </button>
-                  </div>
-                </section>
-              )}
-              {!!state.tasks.length && (
-                <div className="stats-grid">
-                  <Stat
-                    label="学习任务"
-                    value={state.tasks.length.toString()}
-                    note={`${completed} 个已完成`}
-                    icon={BookOpen}
-                  />
-                  <Stat
-                    label="Agent 状态"
-                    value={phaseLabels[agent.phase]}
-                    note={currentTask?.name ?? "等待开始学习任务"}
-                    icon={Bot}
-                    accent
-                  />
-                  <Stat
-                    label="视频监测"
-                    value={agent.videos.length.toString()}
-                    note={
-                      agent.videos.some((v) => v.status === "playing")
-                        ? "正在读取真实播放状态"
-                        : "等待页面中的播放器"
-                    }
-                    icon={Video}
-                  />
-                  <Stat
-                    label="本次模型调用"
-                    value={agent.modelCalls.toString()}
-                    note={
-                      agent.startedAt
-                        ? `已运行 ${time(elapsed)}`
-                        : "按需调用，减少重复理解"
-                    }
-                    icon={Activity}
-                  />
-                </div>
-              )}
               {!!state.tasks.length && (
                 <TaskControl
                   selected={selected}
@@ -575,7 +527,7 @@ export default function App() {
                   pause={() => interrupt(() => api!.pause())}
                   resume={() => run("resume", () => api!.resume())}
                   stop={() => interrupt(() => api!.stop())}
-                  add={() => setTaskModal(true)}
+                  add={() => openDialog("task")}
                 />
               )}
               <div className="dashboard-grid">
@@ -604,16 +556,92 @@ export default function App() {
                     browserOpen={state.browserOpen}
                     observation={agent.observation}
                     now={now}
-                    open={() => setBrowserModal(true)}
+                    open={() => openDialog("browser")}
                     blocked={blocked}
+                    preview={() =>
+                      agent.observation &&
+                      openDialog("preview", agent.observation)
+                    }
                   />
                 </section>
                 <aside className="right-stack">
+                  {!state.tasks.length && (
+                    <section className="getting-started">
+                      <div className="setup-heading">
+                        <h2>准备开始</h2>
+                        <span>
+                          {Number(state.model.hasKey) +
+                            Number(state.browserOpen)}{" "}
+                          / 3
+                        </span>
+                      </div>
+                      <p>只需三步，开启学习辅助。</p>
+                      <div className="getting-started-actions">
+                        <button
+                          disabled={blocked}
+                          onClick={() => setView("settings")}
+                        >
+                          <span
+                            className={
+                              state.model.hasKey
+                                ? "step-marker done"
+                                : "step-marker"
+                            }
+                          >
+                            {state.model.hasKey ? <Check size={14} /> : "1"}
+                          </span>
+                          <span className="setup-copy">
+                            <strong>
+                              {state.model.hasKey
+                                ? "模型已配置"
+                                : "连接 AI 模型"}
+                            </strong>
+                            <small>选择服务商，添加密钥</small>
+                          </span>
+                          <ChevronRight size={15} />
+                        </button>
+                        <button
+                          disabled={blocked}
+                          onClick={() => openDialog("browser")}
+                        >
+                          <span
+                            className={
+                              state.browserOpen
+                                ? "step-marker done"
+                                : "step-marker"
+                            }
+                          >
+                            {state.browserOpen ? <Check size={14} /> : "2"}
+                          </span>
+                          <span className="setup-copy">
+                            <strong>
+                              {state.browserOpen
+                                ? "浏览器已打开"
+                                : "登录学习通"}
+                            </strong>
+                            <small>在学习浏览器中手动登录</small>
+                          </span>
+                          <ChevronRight size={15} />
+                        </button>
+                        <button
+                          disabled={blocked}
+                          onClick={() => openDialog("task")}
+                        >
+                          <span className="step-marker">3</span>
+                          <span className="setup-copy">
+                            <strong>创建学习任务</strong>
+                            <small>添加课程，设定本次目标</small>
+                          </span>
+                          <ChevronRight size={15} />
+                        </button>
+                      </div>
+                    </section>
+                  )}
                   <section className="panel agent-panel">
                     <div className="panel-header">
                       <div className="panel-title">
                         <Bot size={17} />
-                        <h2>Agent 实时状态</h2>
+                        <h2>学习助手</h2>
                       </div>
                       <span className={`status-dot ${active ? "live" : ""}`} />
                     </div>
@@ -631,30 +659,49 @@ export default function App() {
                         <strong>{phaseLabels[agent.phase]}</strong>
                       </div>
                       <p className="agent-message">{agent.message}</p>
-                      <div className="agent-step">
-                        <span>已执行步骤</span>
-                        <strong>{agent.step}</strong>
-                      </div>
-                      <div className="execution-track">
-                        {["观察", "理解", "操作", "验证"].map((label, i) => (
-                          <span
-                            key={label}
-                            className={
-                              [
-                                "observing",
-                                "thinking",
-                                "executing",
-                                "verifying",
-                              ][i] === agent.phase
-                                ? "current"
-                                : ""
-                            }
+                      {!!state.tasks.length && (
+                        <>
+                          <div
+                            className="execution-track"
+                            aria-label="执行流程"
                           >
-                            <span>{i + 1}</span>
-                            {label}
-                          </span>
-                        ))}
-                      </div>
+                            {["观察", "理解", "操作", "验证"].map(
+                              (label, i) => (
+                                <span
+                                  key={label}
+                                  className={
+                                    [
+                                      "observing",
+                                      "thinking",
+                                      "executing",
+                                      "verifying",
+                                    ][i] === agent.phase
+                                      ? "current"
+                                      : ""
+                                  }
+                                >
+                                  <span />
+                                  {label}
+                                </span>
+                              ),
+                            )}
+                          </div>
+                          <div className="agent-metrics">
+                            <div>
+                              <strong>{agent.step}</strong>
+                              <span>执行步骤</span>
+                            </div>
+                            <div>
+                              <strong>{agent.modelCalls}</strong>
+                              <span>模型调用</span>
+                            </div>
+                            <div>
+                              <strong>{time(elapsed)}</strong>
+                              <span>运行时长</span>
+                            </div>
+                          </div>
+                        </>
+                      )}
                       {pending && (
                         <button
                           className="button soft full-width"
@@ -672,37 +719,43 @@ export default function App() {
                       )}
                     </div>
                   </section>
-                  <section className="panel video-panel">
-                    <div className="panel-header">
-                      <div className="panel-title">
-                        <Video size={17} />
-                        <h2>视频监测</h2>
+                  {(state.tasks.length > 0 || agent.observation) && (
+                    <section className="panel video-panel">
+                      <div className="panel-header">
+                        <div className="panel-title">
+                          <Video size={17} />
+                          <h2>视频监测</h2>
+                        </div>
+                        <Badge tone={agent.videos.length ? "teal" : "neutral"}>
+                          {agent.videos.length} 个播放器
+                        </Badge>
                       </div>
-                      <Badge tone={agent.videos.length ? "teal" : "neutral"}>
-                        {agent.videos.length} 个播放器
-                      </Badge>
-                    </div>
-                    <VideoMonitor
-                      videos={agent.videos}
-                      completion={agent.observation?.completion}
-                    />
-                  </section>
+                      <VideoMonitor
+                        videos={agent.videos}
+                        completion={agent.observation?.completion}
+                      />
+                    </section>
+                  )}
+                  <p className="session-note">
+                    <ShieldCheck size={14} />
+                    点击、输入和跳转前由你确认
+                  </p>
                 </aside>
               </div>
-              <section className="panel recent-panel">
-                <div className="panel-header">
-                  <div className="panel-title">
-                    <Terminal size={16} />
-                    <h2>最近动态</h2>
+              {state.logs.length > 0 && (
+                <section className="panel recent-panel">
+                  <div className="panel-header">
+                    <div className="panel-title">
+                      <Terminal size={16} />
+                      <h2>最近动态</h2>
+                    </div>
+                    <button
+                      className="text-button"
+                      onClick={() => setView("activity")}
+                    >
+                      全部日志 <ArrowRight size={13} />
+                    </button>
                   </div>
-                  <button
-                    className="text-button"
-                    onClick={() => setView("activity")}
-                  >
-                    全部日志 <ArrowRight size={13} />
-                  </button>
-                </div>
-                {state.logs.length ? (
                   <div className="recent-logs">
                     {state.logs
                       .slice(-3)
@@ -715,13 +768,8 @@ export default function App() {
                         </div>
                       ))}
                   </div>
-                ) : (
-                  <div className="quiet-empty">
-                    <span className="log-indicator" />
-                    运行记录会显示在这里。从打开浏览器开始你的学习。
-                  </div>
-                )}
-              </section>
+                </section>
+              )}
             </>
           )}
 
@@ -733,7 +781,7 @@ export default function App() {
                   <h2>全部任务</h2>
                   <Badge>{state.tasks.length}</Badge>
                 </div>
-                <span className="subtle">任务与最近状态保存在本机</span>
+                <span className="subtle">{completed} 个已完成</span>
               </div>
               {state.tasks.length ? (
                 <div className="task-list">
@@ -760,11 +808,13 @@ export default function App() {
                         tone={
                           task.status === "completed"
                             ? "teal"
-                            : task.status === "error"
-                              ? "red"
-                              : task.status === "needs_user"
-                                ? "amber"
-                                : "neutral"
+                            : task.status === "running"
+                              ? "blue"
+                              : task.status === "error"
+                                ? "red"
+                                : task.status === "needs_user"
+                                  ? "amber"
+                                  : "neutral"
                         }
                       >
                         {taskLabels[task.status]}
@@ -806,7 +856,7 @@ export default function App() {
                     <button
                       className="button primary"
                       disabled={blocked}
-                      onClick={() => setTaskModal(true)}
+                      onClick={() => openDialog("task")}
                     >
                       <Plus size={16} />
                       新建任务
@@ -827,7 +877,6 @@ export default function App() {
                         <ShieldCheck size={22} />
                       </span>
                       <div>
-                        <div className="eyebrow">HUMAN IN THE LOOP</div>
                         <h2>
                           {pending.kind === "answers"
                             ? "请核对题目与答案建议"
@@ -886,12 +935,12 @@ export default function App() {
                     <Empty
                       icon={FileQuestion}
                       title="让 AI 阅读当前练习截图"
-                      description="在浏览器中打开章节练习，创建“分析当前页面题目”的任务并开始。题干与选项由多模态模型直接阅读截图。"
+                      description="打开章节练习并创建分析任务。AI 会阅读页面截图，给出答案建议与解析。"
                       action={
                         <button
                           className="button secondary"
                           disabled={blocked}
-                          onClick={() => setTaskModal(true)}
+                          onClick={() => openDialog("task")}
                         >
                           <Plus size={16} />
                           创建分析任务
@@ -920,10 +969,22 @@ export default function App() {
                   </div>
                   {agent.observation ? (
                     <div className="source-preview">
-                      <img
-                        src={agent.observation.screenshot}
-                        alt="本次 AI 分析使用的网页截图"
-                      />
+                      <button
+                        className="source-image-button"
+                        aria-label="放大分析截图"
+                        onClick={() =>
+                          openDialog("preview", agent.observation!)
+                        }
+                      >
+                        <img
+                          src={agent.observation.screenshot}
+                          alt="本次 AI 分析使用的网页截图"
+                        />
+                        <span>
+                          <Expand size={13} />
+                          放大查看
+                        </span>
+                      </button>
                       <strong>
                         {agent.observation.title ||
                           pageLabels[agent.observation.pageType]}
@@ -933,10 +994,7 @@ export default function App() {
                         {agent.observation.viewport.width} ×{" "}
                         {agent.observation.viewport.height}
                       </span>
-                      <p>
-                        截图是题目识别的主要来源，DOM
-                        仅辅助导航和播放器状态检测。
-                      </p>
+                      <p>请对照截图核对题干、选项和公式。</p>
                     </div>
                   ) : (
                     <div className="source-empty">
@@ -965,18 +1023,15 @@ export default function App() {
               run={run}
             />
           )}
-          <footer className="content-footer">
-            <span>
-              <ShieldCheck size={12} />
-              真实学习 · 受控执行 · 人工确认
-            </span>
-            <span>STUDY AGENT / LOCAL FIRST</span>
-          </footer>
         </div>
       </main>
       {taskModal && (
         <TaskModal
-          close={() => setTaskModal(false)}
+          error={error}
+          close={() => {
+            setTaskModal(false);
+            setError(null);
+          }}
           blocked={blocked}
           initialUrl={agent.observation?.url}
           currentPage={
@@ -1001,8 +1056,12 @@ export default function App() {
       )}
       {browserModal && (
         <BrowserModal
+          error={error}
           initialUrl={selected?.url ?? "https://i.chaoxing.com/"}
-          close={() => setBrowserModal(false)}
+          close={() => {
+            setBrowserModal(false);
+            setError(null);
+          }}
           blocked={blocked || active}
           submit={(url) =>
             run("open", async () => {
@@ -1012,6 +1071,9 @@ export default function App() {
             })
           }
         />
+      )}
+      {preview && (
+        <ScreenshotModal observation={preview} close={() => setPreview(null)} />
       )}
       {busy && (
         <div className="busy-indicator" role="status">
@@ -1023,33 +1085,6 @@ export default function App() {
   );
 }
 
-function Stat({
-  label,
-  value,
-  note,
-  icon: Icon,
-  accent,
-}: {
-  label: string;
-  value: string;
-  note: string;
-  icon: LucideIcon;
-  accent?: boolean;
-}) {
-  return (
-    <section className={`stat-card ${accent ? "stat-accent" : ""}`}>
-      <div className="stat-label">
-        {label}
-        <Icon size={17} strokeWidth={1.5} />
-      </div>
-      <div className="stat-value">{value}</div>
-      <div className="stat-note">
-        {accent && <span className="small-dot" />}
-        {note}
-      </div>
-    </section>
-  );
-}
 function TaskControl({
   selected,
   agentPhase,
@@ -1102,9 +1137,6 @@ function TaskControl({
               ))}
             </select>
             <p title={selected.goal}>{selected.goal}</p>
-            <span className="task-entry-note">
-              开始时打开任务地址；恢复时继续当前页面。
-            </span>
           </>
         ) : (
           <>
@@ -1158,56 +1190,30 @@ function ObservationView({
   browserOpen,
   open,
   blocked,
+  preview,
 }: {
   observation: Observation | null;
   now: number;
   browserOpen: boolean;
   open: () => void;
   blocked: boolean;
+  preview: () => void;
 }) {
   if (!observation)
     return (
       <div className="browser-empty">
-        <div className="browser-illustration">
-          <div className="illustration-bar">
-            <i />
-            <i />
-            <i />
-            <span />
-          </div>
-          <div className="illustration-content">
-            <Monitor size={31} strokeWidth={1.2} />
-            <span />
-            <span />
-          </div>
-          <div className="illustration-bot">
-            <Bot size={21} />
-          </div>
-        </div>
-        <h3>{browserOpen ? "浏览器已就绪，等待观察" : "连接你的学习页面"}</h3>
+        <StudyIllustration />
+        <h3>{browserOpen ? "课程页面已就绪" : "把专注留给学习"}</h3>
         <p>
           {browserOpen
-            ? "手动登录并打开课程后，点击“重新观察”获取当前截图。"
-            : "打开独立学习浏览器，手动登录学习通。合法会话会保存在本机，供下次使用。"}
+            ? "进入课程后，点击“重新观察”查看当前页面。"
+            : "连接学习通，让 AI 协助理解题目、观察课程。"}
         </p>
-        <button className="button secondary" disabled={blocked} onClick={open}>
+        <button className="button primary" disabled={blocked} onClick={open}>
           <ExternalLink size={15} />
           {browserOpen ? "前往学习页面" : "打开学习浏览器"}
         </button>
-        <div className="empty-capabilities">
-          <span>
-            <Check size={12} />
-            会话复用
-          </span>
-          <span>
-            <Check size={12} />
-            多模态理解
-          </span>
-          <span>
-            <Check size={12} />
-            受控操作
-          </span>
-        </div>
+        <span className="browser-empty-note">手动登录一次，下次继续学习</span>
       </div>
     );
   const age = Math.max(0, Math.floor((now - observation.capturedAt) / 1000));
@@ -1227,12 +1233,20 @@ function ObservationView({
           {age < 60 ? `${age} 秒前` : `${Math.floor(age / 60)} 分钟前`}
         </Badge>
       </div>
-      <div className="screenshot-wrap">
+      <button
+        className="screenshot-wrap"
+        onClick={preview}
+        aria-label="放大浏览器截图"
+      >
         <img
           src={observation.screenshot}
           alt={`浏览器观察截图：${observation.title || observation.url}`}
         />
-      </div>
+        <span className="screenshot-expand">
+          <Expand size={14} />
+          放大查看
+        </span>
+      </button>
       <div className="observation-meta">
         <span>
           <Monitor size={12} />
@@ -1463,13 +1477,19 @@ function Modal({
   subtitle,
   close,
   children,
+  className = "",
 }: {
   title: string;
   subtitle: string;
   close: () => void;
   children: ReactNode;
+  className?: string;
 }) {
   const modal = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (!modal.current?.contains(document.activeElement))
+      modal.current?.querySelector<HTMLElement>("button, input")?.focus();
+  }, []);
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") close();
@@ -1501,7 +1521,7 @@ function Modal({
     >
       <section
         ref={modal}
-        className="modal"
+        className={`modal ${className}`}
         role="dialog"
         aria-modal="true"
         aria-label={title}
@@ -1523,12 +1543,14 @@ function Modal({
 function TaskModal({
   close,
   blocked,
+  error,
   initialUrl,
   currentPage,
   submit,
 }: {
   close: () => void;
   blocked: boolean;
+  error: string | null;
   initialUrl?: string;
   currentPage?: () => Promise<Observation | null>;
   submit: (input: { name: string; url: string; goal: string }) => void;
@@ -1552,6 +1574,17 @@ function TaskModal({
     >
       <form onSubmit={onSubmit}>
         <div className="modal-body">
+          {error && (
+            <div className="banner error" role="alert">
+              <AlertCircle size={16} />
+              <p>
+                {error.replace(
+                  /^Error invoking remote method '[^']+': (?:Error: )?/,
+                  "",
+                )}
+              </p>
+            </div>
+          )}
           <label className="field">
             任务名称
             <input
@@ -1644,18 +1677,20 @@ function BrowserModal({
   initialUrl,
   close,
   blocked,
+  error,
   submit,
 }: {
   initialUrl: string;
   close: () => void;
   blocked: boolean;
+  error: string | null;
   submit: (url: string) => void;
 }) {
   const [url, setUrl] = useState(initialUrl);
   return (
     <Modal
       title="打开学习浏览器"
-      subtitle="使用独立 Chromium 浏览器，保留你的合法登录会话。"
+      subtitle="在独立窗口中登录学习通，登录状态保存在本机。"
       close={close}
     >
       <form
@@ -1665,6 +1700,17 @@ function BrowserModal({
         }}
       >
         <div className="modal-body">
+          {error && (
+            <div className="banner error" role="alert">
+              <AlertCircle size={16} />
+              <p>
+                {error.replace(
+                  /^Error invoking remote method '[^']+': (?:Error: )?/,
+                  "",
+                )}
+              </p>
+            </div>
+          )}
           <label className="field">
             学习页面地址
             <input
@@ -1706,6 +1752,47 @@ function BrowserModal({
           </button>
         </div>
       </form>
+    </Modal>
+  );
+}
+
+function ScreenshotModal({
+  observation,
+  close,
+}: {
+  observation: Observation;
+  close: () => void;
+}) {
+  const [original, setOriginal] = useState(false);
+  return (
+    <Modal
+      title="页面截图"
+      subtitle={observation.title || displayUrl(observation.url)}
+      close={close}
+      className="screenshot-modal"
+    >
+      <div
+        className={`screenshot-viewer ${original ? "original-size" : ""}`}
+        tabIndex={0}
+        aria-label="截图查看区域，可滚动查看原始尺寸图片"
+      >
+        <img
+          src={observation.screenshot}
+          alt={`页面截图：${observation.title || displayUrl(observation.url)}`}
+          style={original ? { width: observation.viewport.width } : undefined}
+        />
+      </div>
+      <div className="screenshot-tools">
+        <span>截图于 {stamp(observation.capturedAt)}</span>
+        <button
+          className="button secondary compact"
+          aria-pressed={original}
+          onClick={() => setOriginal(!original)}
+        >
+          <Expand size={14} />
+          {original ? "适应窗口" : "原始尺寸"}
+        </button>
+      </div>
     </Modal>
   );
 }
