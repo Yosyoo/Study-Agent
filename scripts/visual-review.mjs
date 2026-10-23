@@ -127,6 +127,14 @@ try {
   await publish(questions)
   await view('AI 题目分析')
   await capture('14-question-confirmation')
+  const quick = { ...questions, agent: { ...questions.agent, mode: 'analysis', taskId: null, requestCount: 1, retryCount: 0 } }
+  await publish(quick)
+  await capture('14b-quick-analysis')
+  assert.equal(await page.getByRole('button', { name: '停止当前任务', exact: true }).isVisible(), true, 'Quick analysis must remain controllable without a task')
+  await publish({ ...quick, agent: { ...quick.agent, phase: 'thinking', pending: null, decision: null, modelRequestStartedAt: Date.now() - 10000, message: '服务已响应，正在接收并校验分析结果…' } })
+  await capture('14c-quick-waiting')
+  await publish(questions)
+
   await page.getByRole('button', { name: '放大分析截图', exact: true }).click()
   await imageDialog.waitFor()
   assert.equal(await imageDialog.locator('img').getAttribute('src'), questionImage)

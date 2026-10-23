@@ -10,6 +10,8 @@ const api: StudyAPI = {
   },
   addTask: (input: TaskInput) => ipcRenderer.invoke('study:add-task', input),
   deleteTask: id => ipcRenderer.invoke('study:delete-task', id),
+  undoDeleteTask: () => ipcRenderer.invoke('study:undo-delete-task'),
+  analyzePage: () => ipcRenderer.invoke('study:analyze-page'),
   openBrowser: url => ipcRenderer.invoke('study:open-browser', url),
   closeBrowser: () => ipcRenderer.invoke('study:close-browser'),
   observe: () => ipcRenderer.invoke('study:observe'),
@@ -19,10 +21,10 @@ const api: StudyAPI = {
   stop: () => ipcRenderer.invoke('study:stop'),
   confirm: (id, approved) => ipcRenderer.invoke('study:confirm', id, approved),
   saveModel: (config: ModelConfig) => ipcRenderer.invoke('study:save-model', config),
-  setApiKey: () => ipcRenderer.invoke('study:set-key'),
-  pasteApiKey: () => ipcRenderer.invoke('study:paste-key'),
-  clearApiKey: () => ipcRenderer.invoke('study:clear-key'),
-  testModel: () => ipcRenderer.invoke('study:test-model'),
+  setApiKey: config => ipcRenderer.invoke('study:set-key', config),
+  pasteApiKey: config => ipcRenderer.invoke('study:paste-key', config),
+  clearApiKey: config => ipcRenderer.invoke('study:clear-key', config),
+  testModel: config => ipcRenderer.invoke('study:test-model', config),
   openDataFolder: () => ipcRenderer.invoke('study:open-data-folder'),
 }
 contextBridge.exposeInMainWorld('study', api)

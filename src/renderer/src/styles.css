@@ -2309,3 +2309,16 @@ h1 {
     scroll-behavior: auto !important;
   }
 }
+
+/* Read-only analysis keeps the source and result in the existing two-column workspace. */
+.analysis-progress { display: flex; align-items: flex-start; gap: 12px; padding: 18px 20px; border-left: 3px solid var(--accent); background: var(--surface); }
+.analysis-progress > svg { color: var(--accent); margin-top: 2px; }
+.analysis-progress p { margin-top: 6px; color: var(--muted); line-height: 1.7; overflow-wrap: anywhere; }
+.analysis-progress small { display: block; color: var(--muted); margin-top: 8px; }
+.banner.success .text-button { margin-left: auto; white-space: nowrap; }
+
+.analysis-loading { padding: 28px; }
+.analysis-loading span { display: block; height: 12px; margin-bottom: 16px; border-radius: 3px; background: var(--line); width: 90%; }
+.analysis-loading span:nth-child(2) { width: 75%; }
+.analysis-loading span:nth-child(3) { width: 55%; }
+.analysis-loading p { margin-top: 22px; color: var(--muted); line-height: 1.7; }

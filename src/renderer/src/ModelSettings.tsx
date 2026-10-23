@@ -16,7 +16,7 @@ import {
   type ModelConfig,
   type PublicModelConfig,
 } from "../../shared/contracts";
-import { applyProviderPreset, providerPresets } from "../../shared/providers";
+import { applyProviderPreset, providerPresets, normalizeProviderConfig } from "../../shared/providers";
 import { ProviderIcon } from "./Visuals";
 
 type Props = {
@@ -71,7 +71,7 @@ export function ModelSettings({ state, blocked, busy, run }: Props) {
   const profile = state.modelProfiles.find(
     (item) => item.provider === selected,
   );
-  const config =
+  const draft =
     drafts[selected] ??
     (profile
       ? configOnly(profile)
@@ -79,13 +79,14 @@ export function ModelSettings({ state, blocked, busy, run }: Props) {
         ? {
             ...defaultModelConfig,
             provider: "custom",
-            protocol: "chat_completions",
+            protocol: "responses",
             tokenParameter: "max_tokens",
             model: "",
             baseUrl: "",
           }
         : applyProviderPreset(defaultModelConfig, selected));
-  const signature = JSON.stringify(config);
+  const config = normalizeProviderConfig(draft);
+  const signature = JSON.stringify(configOnly({ ...config, model: config.model.trim(), baseUrl: config.baseUrl.trim() }));
   const dirty = !profile || signature !== JSON.stringify(configOnly(profile));
   const isCurrent =
     !dirty && signature === JSON.stringify(configOnly(state.model));
@@ -123,19 +124,18 @@ export function ModelSettings({ state, blocked, busy, run }: Props) {
       (event.nativeEvent as SubmitEvent).submitter?.getAttribute("value") ===
       "test";
     void run(test ? "testModel" : "saveModel", async () => {
-      const savedConfig = await persist();
       if (test) {
         setFeedback(null);
         try {
-          const message = await api.testModel();
+          const message = await api.testModel(config);
           setFeedback({
-            config: JSON.stringify(savedConfig),
+            config: signature,
             kind: "success",
             message,
           });
         } catch (error) {
           setFeedback({
-            config: JSON.stringify(savedConfig),
+            config: signature,
             kind: "error",
             message:
               error instanceof Error
@@ -146,14 +146,15 @@ export function ModelSettings({ state, blocked, busy, run }: Props) {
                 : "连接失败，请重试。",
           });
         }
+      } else {
+        await persist();
       }
     });
   }
   function importKey(source: "clipboard" | "file") {
     void run(source === "clipboard" ? "pasteKey" : "setKey", async () => {
-      await persist();
       setFeedback(null);
-      return source === "clipboard" ? api.pasteApiKey() : api.setApiKey();
+      return source === "clipboard" ? api.pasteApiKey(config) : api.setApiKey(config);
     });
   }
   return (
@@ -294,7 +295,7 @@ export function ModelSettings({ state, blocked, busy, run }: Props) {
                     />
                   </label>
                 )}
-                <label className="field">
+                {selected === "custom" && <label className="field">
                   接口协议
                   <select
                     value={config.protocol}
@@ -308,9 +309,10 @@ export function ModelSettings({ state, blocked, busy, run }: Props) {
                     <option value="chat_completions">Chat Completions</option>
                     <option value="responses">OpenAI Responses</option>
                     <option value="anthropic">Anthropic Messages</option>
+                    <option value="gemini">Gemini 原生接口</option>
                   </select>
-                </label>
-                {config.protocol === "chat_completions" && (
+                </label>}
+                {selected === "custom" && config.protocol === "chat_completions" && (
                   <label className="field">
                     输出参数
                     <select
@@ -356,7 +358,7 @@ export function ModelSettings({ state, blocked, busy, run }: Props) {
                     }
                   />
                 </label>
-                {config.protocol !== "anthropic" && (
+                {selected === "custom" && config.protocol !== "anthropic" && (
                   <label className="model-json-toggle">
                     <input
                       type="checkbox"
@@ -382,9 +384,8 @@ export function ModelSettings({ state, blocked, busy, run }: Props) {
                       className="text-button danger"
                       onClick={() =>
                         run("clearKey", async () => {
-                          await persist();
                           setFeedback(null);
-                          return api.clearApiKey();
+                          return api.clearApiKey(config);
                         })
                       }
                     >
@@ -442,7 +443,7 @@ export function ModelSettings({ state, blocked, busy, run }: Props) {
       </div>
       <p className="model-privacy">
         <ShieldCheck size={14} />
-        课程截图会发送至所选服务。连接测试只发送应用生成的随机图片。
+        连接测试只发送随机图片，不切换当前模型。点击“保存并使用”或“使用此配置”后才会启用。
       </p>
       <details className="panel connection-local">
         <summary>

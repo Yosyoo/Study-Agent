@@ -1,6 +1,6 @@
 {
   "name": "study-agent",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "A supervised multimodal browser companion for online learning",
   "author": "Study Agent contributors",
@@ -65,11 +65,16 @@
       "node_modules/playwright*/**"
     ],
     "extraResources": [
-      { "from": ".local/browser-runtime", "to": "browser-runtime" }
+      {
+        "from": ".local/browser-runtime",
+        "to": "browser-runtime"
+      }
     ],
     "mac": {
       "category": "public.app-category.education",
-      "target": ["dmg"]
+      "target": [
+        "dmg"
+      ]
     },
     "win": {
       "target": [

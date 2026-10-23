@@ -47,6 +47,7 @@ const server = createServer(async (request, response) => {
     const content = body.messages[1].content
     const probe = content[0].text.startsWith('Identify the colors')
     const reply = probe ? responseMode === 'blind' ? { ok: true } : { colors: readColors(content[1].image_url.url) }
+      : responseMode === 'answers' ? { summary: '本地测试：截图中的一道题目。', confidence: 1, pageType: 'exercise', questions: [{ type: 'single', stem: '1+1?', options: ['2', '3'], suggestedAnswer: ['2'], explanation: '整数加法', confidence: 1, needsReview: true }], action: { type: 'click', x: 50, y: 50 }, needsHuman: false, done: false }
       : { summary: '本地测试：已观察到课程 B 页面。', confidence: 1, pageType: 'courses', questions: [], action: null, needsHuman: false, done: true }
     response.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify(reply) }, finish_reason: 'stop' }] })); return
   }
@@ -91,7 +92,8 @@ try {
   await page.getByLabel('Model Name', { exact: false }).fill(' edited-before-test ')
   await page.getByRole('button', { name: '测试连接', exact: true }).click()
   await page.locator('.model-feedback.error').filter({ hasText: '未通过图片内容校验' }).waitFor()
-  assert.equal(requests[0].body.model, 'edited-before-test', 'Test must save and use the visible configuration')
+  assert.equal(requests[0].body.model, 'edited-before-test', 'Test must use the visible configuration without activating it')
+  assert.equal((await page.evaluate(() => window.study.getState())).model.model, 'local-test-model', 'Testing a draft must not change the active model')
   assert.equal(requests[0].authorization, `Bearer ${secret}`)
   assert.equal(JSON.stringify(await page.evaluate(() => window.study.getState())).includes(secret), false)
 
@@ -104,6 +106,9 @@ try {
   await page.getByRole('button', { name: '测试连接', exact: true }).click()
   await page.locator('.model-feedback.success').filter({ hasText: '视觉连接验证通过' }).waitFor()
   assert.equal(requests.length, 3, 'Invalid visual replies and 401 must not retry')
+
+  await page.getByRole('button', { name: '保存并使用', exact: true }).click()
+  await eventually(async () => (await page.evaluate(() => window.study.getState())).model.model === 'edited-before-test', 'Explicit save must activate the model')
 
   // Exercise upgrading a real encrypted single-key profile, then restarting again.
   const beforeRestart = await page.evaluate(() => window.study.getState())
@@ -140,6 +145,21 @@ try {
     const completed = await page.evaluate(() => window.study.getState())
     assert.equal(completed.agent.observation.url, `${origin}/course-b`, 'Starting task B must not reuse course A')
     assert.ok(completed.agent.endedAt >= completed.agent.startedAt)
+    responseMode = 'answers'
+    await page.getByRole('button', { name: '学习工作台', exact: true }).click()
+    const tasksBeforeAnalysis = completed.tasks.length
+    await page.getByRole('button', { name: '分析当前页面', exact: true }).click()
+    await page.getByRole('button', { name: '已核对建议', exact: true }).waitFor()
+    const analyzed = await page.evaluate(() => window.study.getState())
+    assert.equal(analyzed.tasks.length, tasksBeforeAnalysis, 'Quick analysis must not add a task')
+    assert.equal(analyzed.agent.taskId, null)
+    assert.equal(analyzed.agent.mode, 'analysis')
+    assert.equal(analyzed.agent.observation.url, `${origin}/course-b`, 'Quick analysis must not navigate')
+    assert.equal(analyzed.agent.pending.kind, 'answers', 'Model action must not override read-only analysis')
+    assert.equal(analyzed.agent.requestCount, 1)
+    await page.getByRole('button', { name: '已核对建议', exact: true }).click()
+    await eventually(async () => (await page.evaluate(() => window.study.getState())).agent.phase === 'completed', 'Quick analysis review did not complete')
+    responseMode = 'vision'
     const beforeVideoCalls = requests.length
     await page.evaluate(async model => {
       const { hasKey, keyStorage, ...config } = model
@@ -158,7 +178,7 @@ try {
     assert.equal(blocked, true, 'Packaged app must ignore the development fixture bypass')
   }
   assert.deepEqual(errors, [])
-  console.log(`PASS Electron workflows: real HTTP visual challenge, actionable 401, save-and-test, encrypted legacy migration/restart; ${packaged ? 'packaged fixture policy' : 'task URL selection, no-key video monitoring, terminal runtime'}. All services/pages are local fixtures.`)
+  console.log(`PASS Electron workflows: real HTTP visual challenge, actionable 401, non-mutating configuration tests, quick read-only analysis, encrypted legacy migration/restart; ${packaged ? 'packaged fixture policy' : 'task URL selection, no-key video monitoring, terminal runtime'}. All services/pages are local fixtures.`)
 } finally {
   if (desktop) await desktop.close()
   server.closeAllConnections()

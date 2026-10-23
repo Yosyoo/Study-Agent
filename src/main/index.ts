@@ -13,7 +13,7 @@ import { MultimodalProvider } from './model/provider'
 import { isTrustedRendererUrl, redact, validateApiKey } from './security'
 import { credentialScope, SecretStore, StateStore, type SavedState } from './store'
 import { initialAgent, defaultModelConfig, modelConfigSchema, taskInputSchema, type AgentSnapshot, type AppState, type ModelConfig, type StudyTask } from '../shared/contracts'
-import { applyProviderPreset, providerPresets } from '../shared/providers'
+import { applyProviderPreset, providerPresets, normalizeProviderConfig } from '../shared/providers'
 
 const directory = dirname(fileURLToPath(import.meta.url))
 let window: BrowserWindow | null = null
@@ -31,6 +31,7 @@ let busy = false
 let keyDialogOpen = false
 let controlGeneration = 0
 let startingTask = false
+let deletedTask: { task: StudyTask; index: number; expiresAt: number } | null = null
 let persistTimer: ReturnType<typeof setTimeout> | null = null
 
 if (!app.isPackaged) loadEnv({ quiet: true })
@@ -50,7 +51,7 @@ function state(): AppState {
     return { ...config, hasKey: !!secret?.key, keyStorage: secret?.mode ?? 'none' as const }
   }
   const profiles = providerPresets.map(preset => applyProviderPreset(defaultModelConfig, preset.id))
-  for (const config of [...saved.modelProfiles, saved.model]) {
+  for (const config of [saved.model, ...saved.modelProfiles]) {
     const index = profiles.findIndex(profile => profile.provider === config.provider)
     if (index === -1) profiles.push(config)
     else profiles[index] = config
@@ -127,6 +128,27 @@ async function exclusive<T>(operation: () => Promise<T>): Promise<T> {
 }
 function assertInactive(): void { if (active()) throw new Error('请先停止当前 Agent 任务，再修改浏览器入口或模型配置。') }
 function provider(): MultimodalProvider { return new MultimodalProvider(saved.model, secrets.key) }
+function makeHarness(): AgentHarness {
+  return new AgentHarness({ browser, provider: { decide: input => {
+    if (!secrets.key && new URL(saved.model.baseUrl).protocol !== 'http:') {
+      throw new Error('需要分析截图，请先停止任务，在「模型与设置」中为当前厂商配置 API Key。视频监测不需要密钥。')
+    }
+    return provider().decide(input)
+  } }, onUpdate: updateAgent, log })
+}
+async function saveProfile(raw: unknown, activate = false): Promise<{ config: ModelConfig; secret: SecretStore }> {
+  const config = normalizeProviderConfig(modelConfigSchema.parse(raw ?? saved.model))
+  new MultimodalProvider(config, '')
+  const secret = await credentialsFor(config)
+  const profiles = saved.modelProfiles.filter(profile => profile.provider !== config.provider)
+  if (!profiles.some(profile => profile.provider === saved.model.provider) && saved.model.provider !== config.provider) profiles.push(saved.model)
+  profiles.push(config)
+  const next = { ...saved, model: activate ? config : saved.model, modelProfiles: profiles }
+  await store.save(next)
+  saved = next
+  if (activate) secrets = secret
+  return { config, secret }
+}
 const idSchema = z.string().uuid()
 
 async function packagedBrowserExecutable(): Promise<string | undefined> {
@@ -154,8 +176,29 @@ function registerIPC(): void {
   handle('study:delete-task', raw => exclusive(async () => {
     const id = idSchema.parse(raw)
     if (agent.taskId === id && active()) throw new Error('请先停止该任务，再删除记录。')
+    const index = saved.tasks.findIndex(task => task.id === id)
+    if (index === -1) throw new Error('任务记录不存在。')
+    deletedTask = { task: structuredClone(saved.tasks[index]), index, expiresAt: Date.now() + 10_000 }
     saved.tasks = saved.tasks.filter(task => task.id !== id)
     persistSoon(); return publish()
+  }))
+  handle('study:undo-delete-task', () => exclusive(async () => {
+    if (!deletedTask || Date.now() >= deletedTask.expiresAt) throw new Error('撤销时间已过，无法恢复这次删除。')
+    if (saved.tasks.length >= 500) throw new Error('任务数量已达上限，无法恢复。')
+    saved.tasks.splice(deletedTask.index, 0, deletedTask.task)
+    deletedTask = null
+    persistSoon(); return publish()
+  }))
+  handle('study:analyze-page', () => exclusive(async () => {
+    assertInactive()
+    if (!browser.isOpen) throw new Error('请先打开学习浏览器并进入需要分析的页面。')
+    if (!secrets.key && new URL(saved.model.baseUrl).protocol !== 'http:') throw new Error('请先在「模型与设置」配置并启用模型。')
+    harness?.dispose()
+    harness = makeHarness()
+    await harness.start({ id: randomUUID(), name: '分析当前页面', url: 'https://i.chaoxing.com',
+      goal: '仅根据当前截图分析可见题目并给出答案建议和解析。不要提出或执行任何浏览器操作；题目不完整时说明缺少什么，由用户手动调整页面。',
+      status: 'pending', createdAt: Date.now(), updatedAt: Date.now(), lastMessage: '' }, 'analysis')
+    return publish()
   }))
   handle('study:open-browser', raw => exclusive(async () => {
     if (active() && !['paused', 'needs_user'].includes(agent.phase)) throw new Error('请先暂停或停止 Agent，再打开学习页面。')
@@ -172,7 +215,7 @@ function registerIPC(): void {
     if (active() && !['paused', 'needs_user'].includes(agent.phase)) throw new Error('Agent 正在操作或等待确认，请先暂停后手动观察。')
     const observation = await browser.observe()
     updateAgent({ ...agent, observation, decision: null, pending: null,
-      message: '当前页面已截图。题目内容仅在开始任务后发送给你配置的模型服务。' })
+      message: '当前页面已截图。点击“分析当前页面”可发送图片并获取解析。' })
     return publish()
   }))
   handle('study:start', raw => exclusive(async () => {
@@ -188,12 +231,7 @@ function registerIPC(): void {
       // Starting a saved task must honor its URL even if another course is already open.
       await browser.open(task.url)
       if (generation !== controlGeneration || shuttingDown) return publish()
-      harness = new AgentHarness({ browser, provider: { decide: input => {
-        if (!secrets.key && new URL(saved.model.baseUrl).protocol !== 'http:') {
-          throw new Error('需要分析截图，请先停止任务，在「模型与设置」中为当前厂商配置 API Key。视频监测不需要密钥。')
-        }
-        return provider().decide(input)
-      } }, onUpdate: updateAgent, log })
+      harness = makeHarness()
       await harness.start(task)
       return publish()
     } catch (error) {
@@ -214,26 +252,19 @@ function registerIPC(): void {
   })
   handle('study:save-model', raw => exclusive(async () => {
     assertInactive()
-    const config = modelConfigSchema.parse(raw)
-    // Constructor validates URL security policy without issuing a network request.
-    new MultimodalProvider(config, '')
-    const nextSecrets = await credentialsFor(config)
-    const profiles = saved.modelProfiles.filter(profile => profile.provider !== saved.model.provider && profile.provider !== config.provider)
-    if (saved.model.provider !== config.provider) profiles.push(saved.model)
-    profiles.push(config)
-    const next = { ...saved, model: config, modelProfiles: profiles }
-    await store.save(next)
-    saved = next; secrets = nextSecrets
+    await saveProfile(raw, true)
     log('info', '模型配置已保存并启用。其他厂商的配置和密钥已保留。'); return publish()
   }))
-  handle('study:paste-key', () => exclusive(async () => {
+  handle('study:paste-key', raw => exclusive(async () => {
     assertInactive()
     // Explicit user paste action; never return clipboard contents to the renderer.
-    await secrets.set(validateApiKey(await clipboard.readText()))
-    log('info', secrets.mode === 'encrypted' ? 'API Key 已由操作系统加密保存。' : '系统加密不可用，API Key 仅保留在当前进程内存。')
+    const key = validateApiKey(await clipboard.readText())
+    const { secret } = await saveProfile(raw)
+    await secret.set(key)
+    log('info', secret.mode === 'encrypted' ? 'API Key 已由操作系统加密保存。' : '系统加密不可用，API Key 仅保留在当前进程内存。')
     return publish()
   }))
-  handle('study:set-key', () => exclusive(async () => {
+  handle('study:set-key', raw => exclusive(async () => {
     assertInactive()
     if (!window || keyDialogOpen) throw new Error('密钥导入窗口已打开。')
     keyDialogOpen = true
@@ -243,16 +274,25 @@ function registerIPC(): void {
       const path = selected.filePaths[0]
       const info = await stat(path)
       if (!info.isFile() || info.size > 8192) throw new Error('密钥文件必须是小于 8 KB 的文本文件。')
-      await secrets.set(validateApiKey(await readFile(path, 'utf8')))
-      log('info', secrets.mode === 'encrypted' ? 'API Key 已由操作系统加密保存。' : '系统加密不可用，API Key 仅保留在当前进程内存。')
+      const key = validateApiKey(await readFile(path, 'utf8'))
+      const { secret } = await saveProfile(raw)
+      await secret.set(key)
+      log('info', secret.mode === 'encrypted' ? 'API Key 已由操作系统加密保存。' : '系统加密不可用，API Key 仅保留在当前进程内存。')
       return publish()
     } finally { keyDialogOpen = false }
   }))
-  handle('study:clear-key', () => exclusive(async () => { assertInactive(); await secrets.clear(); log('info', '已清除当前 API Key。'); return publish() }))
-  handle('study:test-model', () => exclusive(async () => {
+  handle('study:clear-key', raw => exclusive(async () => {
     assertInactive()
-    if (!secrets.key && new URL(saved.model.baseUrl).protocol !== 'http:') throw new Error('请先为当前厂商配置 API Key。')
-    const message = await provider().testConnection()
+    const config = normalizeProviderConfig(modelConfigSchema.parse(raw ?? saved.model))
+    const secret = await credentialsFor(config)
+    await secret.clear(); log('info', '已清除所选服务的 API Key。'); return publish()
+  }))
+  handle('study:test-model', raw => exclusive(async () => {
+    assertInactive()
+    const config = normalizeProviderConfig(modelConfigSchema.parse(raw ?? saved.model))
+    const secret = await credentialsFor(config)
+    if (!secret.key && new URL(config.baseUrl).protocol !== 'http:') throw new Error('请先为所选厂商配置 API Key。')
+    const message = await new MultimodalProvider(config, secret.key).testConnection()
     log('info', message); return message
   }))
   handle('study:open-data-folder', async () => {

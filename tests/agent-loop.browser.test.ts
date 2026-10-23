@@ -90,6 +90,9 @@ describe('real Chromium + local scripted multimodal HTTP + supervised harness', 
     expect(Buffer.from(image!.split(',')[1], 'base64').length).toBeGreaterThan(1000)
 
     await harness.confirm(harness.snapshot.pending!.id, true)
+    await waitPhase(harness, 'needs_user')
+    expect(requests).toHaveLength(1)
+    harness.resume()
     await waitPhase(harness, 'awaiting_confirmation')
     expect(execute).toHaveBeenCalledTimes(1)
     expect(harness.snapshot.observation?.url).toBe(new URL('/exercise', task.url).href)
@@ -100,7 +103,7 @@ describe('real Chromium + local scripted multimodal HTTP + supervised harness', 
     expect(JSON.stringify(requests)).not.toContain('VISIBLE_QUESTION_CANARY_8bce')
     expect(JSON.stringify(requests)).not.toContain('DOM_ONLY_CANARY_a8b341')
     const verified = await execute.mock.results[0].value
-    expect(verified.changed).toBe(true)
+    expect(verified.verification).toBe('unverified')
     expect(verified.observation.url).toContain('/exercise')
     expect(verified.observation.screenshot).not.toBe(beforeScreenshot)
 

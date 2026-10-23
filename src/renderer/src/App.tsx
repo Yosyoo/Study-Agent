@@ -225,6 +225,7 @@ export default function App() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [undoDelete, setUndoDelete] = useState<{ name: string; expiresAt: number } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [taskModal, setTaskModal] = useState(false);
   const [browserModal, setBrowserModal] = useState(false);
@@ -327,9 +328,18 @@ export default function App() {
   }
   const blocked = !desktop || Boolean(busy);
   const completed = state.tasks.filter((t) => t.status === "completed").length;
-  const elapsed = agent.startedAt
-    ? Math.max(0, Math.round(((agent.endedAt ?? now) - agent.startedAt) / 1000))
-    : 0;
+  const elapsed = Math.floor(((agent.activeMs ?? 0) + (agent.activeSince == null ? 0 : Math.max(0, now - agent.activeSince))) / 1000);
+  const canAnalyze = !blocked && (["idle", "completed", "stopped", "error"].includes(agent.phase) || (agent.mode === "analysis" && ["needs_user", "paused", "awaiting_confirmation"].includes(agent.phase)));
+  async function analyzeCurrent() {
+    if (!state.model.hasKey && !/^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(?=[:/]|$)/.test(state.model.baseUrl)) { setView("settings"); return; }
+    if (!state.browserOpen) { openDialog("browser"); return; }
+    await run("analyze", async () => {
+      if (!["idle", "completed", "stopped", "error"].includes(agent.phase)) await api!.stop();
+      const next = await api!.analyzePage();
+      setView("analysis");
+      return next;
+    });
+  }
   const heading = {
     dashboard: ["学习工作台", "打开课程，开始今天的学习。"],
     tasks: ["课程与任务", "管理课程页面与每次学习的具体目标。"],
@@ -403,8 +413,8 @@ export default function App() {
             <span className="platform-edition">网页版</span>
           </div>
           <div className="topbar-right">
-            {view !== "dashboard" &&
-              currentTask &&
+            {(view !== "dashboard" || agent.mode === "analysis") &&
+              agent.startedAt &&
               (active ||
                 agent.phase === "paused" ||
                 agent.phase === "needs_user") && (
@@ -480,6 +490,14 @@ export default function App() {
               </IconButton>
             </div>
           )}
+          {undoDelete && undoDelete.expiresAt > now && (
+            <div className="banner success" role="status">
+              <CheckCircle2 size={18} /><span>已删除「{undoDelete.name}」</span>
+              <button className="text-button" disabled={blocked} onClick={() => run("undoDelete", async () => {
+                const next = await api!.undoDeleteTask(); setUndoDelete(null); return next;
+              })}>撤销删除</button>
+            </div>
+          )}
           <div className="page-heading">
             <div>
               <h1>{heading[0]}</h1>
@@ -496,9 +514,14 @@ export default function App() {
                   {state.browserOpen ? "前往学习页面" : "打开学习浏览器"}
                 </button>
               )}
+              {(view === "dashboard" || view === "analysis") && (
+                <button className="button primary" disabled={!canAnalyze} onClick={analyzeCurrent}>
+                  <FileQuestion size={16} />分析当前页面
+                </button>
+              )}
               {(view === "dashboard" || view === "tasks") && (
                 <button
-                  className="button primary"
+                  className={`button ${view === "tasks" ? "primary" : "secondary"}`}
                   disabled={blocked}
                   onClick={() => openDialog("task")}
                 >
@@ -511,7 +534,7 @@ export default function App() {
 
           {view === "dashboard" && (
             <>
-              {!!state.tasks.length && (
+              {!!state.tasks.length && (agent.mode !== "analysis" || ["completed", "stopped", "error"].includes(agent.phase)) && (
                 <TaskControl
                   selected={selected}
                   agentPhase={agent.phase}
@@ -624,13 +647,13 @@ export default function App() {
                           <ChevronRight size={15} />
                         </button>
                         <button
-                          disabled={blocked}
-                          onClick={() => openDialog("task")}
+                          disabled={!canAnalyze}
+                          onClick={analyzeCurrent}
                         >
                           <span className="step-marker">3</span>
                           <span className="setup-copy">
-                            <strong>创建学习任务</strong>
-                            <small>添加课程，设定本次目标</small>
+                            <strong>分析当前页面</strong>
+                            <small>直接阅读练习截图，无需创建任务</small>
                           </span>
                           <ChevronRight size={15} />
                         </button>
@@ -659,7 +682,8 @@ export default function App() {
                         <strong>{phaseLabels[agent.phase]}</strong>
                       </div>
                       <p className="agent-message">{agent.message}</p>
-                      {!!state.tasks.length && (
+                      {agent.phase === "thinking" && agent.modelRequestStartedAt != null && <p className="agent-message">本次请求已等待 {Math.max(0, Math.floor((now - agent.modelRequestStartedAt) / 1000))} 秒</p>}
+                      {agent.startedAt !== null && (
                         <>
                           <div
                             className="execution-track"
@@ -692,12 +716,12 @@ export default function App() {
                               <span>执行步骤</span>
                             </div>
                             <div>
-                              <strong>{agent.modelCalls}</strong>
-                              <span>模型调用</span>
+                              <strong>{agent.requestCount ?? 0}</strong>
+                              <span>请求 · 重试 {agent.retryCount ?? 0}</span>
                             </div>
                             <div>
                               <strong>{time(elapsed)}</strong>
-                              <span>运行时长</span>
+                              <span>实际运行</span>
                             </div>
                           </div>
                         </>
@@ -832,7 +856,11 @@ export default function App() {
                         label={`删除 ${task.name}`}
                         className="danger-hover"
                         onClick={() =>
-                          run("delete", () => api!.deleteTask(task.id))
+                          run("delete", async () => {
+                            const next = await api!.deleteTask(task.id);
+                            setUndoDelete({ name: task.name, expiresAt: Date.now() + 8000 });
+                            return next;
+                          })
                         }
                         disabled={
                           blocked ||
@@ -870,6 +898,14 @@ export default function App() {
           {view === "analysis" && (
             <div className="analysis-layout">
               <div className="analysis-main">
+                {agent.mode === "analysis" && agent.phase !== "idle" && !pending && (
+                  <section className="analysis-progress" role="status">
+                    {active && !pending ? <LoaderCircle size={20} className="spinning" /> : <FileQuestion size={20} />}
+                    <div><strong>{phaseLabels[agent.phase]}</strong><p>{agent.message}</p>
+                      {agent.phase === "thinking" && agent.modelRequestStartedAt != null && <small>本次请求已等待 {Math.max(0, Math.floor((now - agent.modelRequestStartedAt) / 1000))} 秒 · 请求 {agent.requestCount} 次 · 重试 {agent.retryCount} 次</small>}
+                    </div>
+                  </section>
+                )}
                 {pending && (
                   <section className="panel confirmation-panel">
                     <div className="confirmation-heading">
@@ -930,20 +966,26 @@ export default function App() {
                     />
                   ),
                 )}
-                {!pending && !agent.decision?.questions.length && (
+                {!pending && active && !agent.decision?.questions.length && (
+                  <section className="panel analysis-loading" aria-busy="true" aria-label="正在分析截图">
+                    <span /><span /><span />
+                    <p>正在阅读题干与选项，完成后会在这里显示解析。</p>
+                  </section>
+                )}
+                {!pending && !active && !agent.decision?.questions.length && (
                   <section className="panel">
                     <Empty
                       icon={FileQuestion}
                       title="让 AI 阅读当前练习截图"
-                      description="打开章节练习并创建分析任务。AI 会阅读页面截图，给出答案建议与解析。"
+                      description="进入章节练习后直接分析，截图会发送至当前模型服务。无需填写课程地址或学习目标。"
                       action={
                         <button
                           className="button secondary"
-                          disabled={blocked}
-                          onClick={() => openDialog("task")}
+                          disabled={!canAnalyze}
+                          onClick={analyzeCurrent}
                         >
-                          <Plus size={16} />
-                          创建分析任务
+                          <FileQuestion size={16} />
+                          开始截图分析
                         </button>
                       }
                     />

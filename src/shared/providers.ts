@@ -50,9 +50,9 @@ export const providerPresets: readonly ProviderPreset[] = [
   },
   {
     id: 'gemini', label: 'Gemini', description: 'Gemini 3.8 Flash · 原生视觉',
-    model: 'gemini-3.8-flash', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
-    protocol: 'chat_completions', tokenParameter: 'max_tokens', jsonMode: true, vision: true,
-    documentationUrl: 'https://ai.google.dev/gemini-api/docs/openai', verifiedAt: '2026-10-22',
+    model: 'gemini-3.8-flash', baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+    protocol: 'gemini', tokenParameter: 'max_tokens', jsonMode: true, vision: true,
+    documentationUrl: 'https://ai.google.dev/api/generate-content', verifiedAt: '2026-10-22',
   },
 ]
 
@@ -68,4 +68,14 @@ export function applyProviderPreset(config: ModelConfig, id: PresetProviderId): 
     ...config, provider: preset.id, baseUrl: preset.baseUrl, model: preset.model,
     protocol: preset.protocol, tokenParameter: preset.tokenParameter, jsonMode: preset.jsonMode,
   }
+}
+
+/** Official endpoints own their protocol; custom gateways retain explicit compatibility settings.
+ * Keep the legacy Gemini endpoint as the credential scope so existing encrypted keys still work. */
+export function normalizeProviderConfig(config: ModelConfig): ModelConfig {
+  const preset = getProviderPreset(config.provider)
+  if (!preset) return config
+  const base = config.baseUrl.replace(/\/+$/, '')
+  if (base !== preset.baseUrl && !(config.provider === 'gemini' && base === 'https://generativelanguage.googleapis.com/v1beta/openai')) return config
+  return { ...config, protocol: preset.protocol, tokenParameter: preset.tokenParameter, jsonMode: preset.jsonMode }
 }

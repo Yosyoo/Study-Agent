@@ -32,6 +32,16 @@ beforeAll(async () => {
       response.writeHead(failNavigation ? 503 : 200)
       response.end('<!doctype html><title>Retry fixture</title><h1>Course</h1>'); return
     }
+    if (url.pathname === '/animated-noop') {
+      response.end(`<!doctype html><button style="position:absolute;left:20px;top:20px;width:140px;height:40px">普通按钮</button><canvas width="300" height="200" style="margin-top:100px"></canvas><script>const ctx=document.querySelector('canvas').getContext('2d');setInterval(()=>{ctx.clearRect(0,0,300,200);ctx.fillText(String(Date.now()),10,40)},20)</script>`); return
+    }
+    if (url.pathname === '/replace-video') {
+      response.end(`<!doctype html><video style="width:300px;height:200px"></video><script>let changed=false;setInterval(async()=>{if(!changed&&(await fetch('/state').then(r=>r.json())).replaceLabel){document.querySelector('video').outerHTML='<video style="width:300px;height:200px"></video>';changed=true}},20)</script>`); return
+    }
+    if (url.pathname === '/scroll') {
+      response.end('<!doctype html><main style="height:4000px">Scrollable fixture</main>'); return
+    }
+    if (url.pathname === '/redirect') { response.writeHead(302, { Location: '/stable-action' }); response.end(); return }
     if (url.pathname === '/stable-action') {
       response.end(`<!doctype html><button style="position:absolute;left:20px;top:20px;width:140px;height:40px" onclick="fetch('/clicked');this.textContent='已点击'">打开章节</button><p style="margin-top:100px" id="content">原始页面内容</p><script>setInterval(async()=>{const s=await fetch('/state').then(r=>r.json());if(s.replaceLabel)content.textContent='新的页面内容'},50)</script>`); return
     }
@@ -252,5 +262,45 @@ describe('real Chromium browser controller against local fixtures', () => {
     await browser.open(origin + '/retry-navigation')
     expect(navigationRequests).toBe(3)
     expect((await browser.observe()).title).toBe('Retry fixture')
+  })
+})
+
+describe('action-specific verification', () => {
+  it('does not count unrelated animation as a successful click or scroll', async () => {
+    await browser.open(origin + '/animated-noop')
+    const before = await browser.observe()
+    const result = await browser.execute({ type: 'click', x: 70, y: 50 }, before)
+    expect(result.observation.screenshot).not.toBe(before.screenshot)
+    expect(result.verification).toBe('unverified')
+    expect(result.changed).toBe(false)
+    const scroll = await browser.execute({ type: 'scroll', deltaY: 400 }, result.observation)
+    expect(scroll.changed).toBe(false)
+  })
+  it('verifies actual scrolling and a known navigation destination', async () => {
+    await browser.open(origin + '/scroll')
+    const scrolled = await browser.execute({ type: 'scroll', deltaY: 400 }, await browser.observe())
+    expect(scrolled.verification).toBe('verified')
+    const navigated = await browser.execute({ type: 'navigate', url: origin + '/stable-action' }, scrolled.observation)
+    expect(navigated.verification).toBe('verified')
+  })
+  it('marks an unexpected redirect for user review instead of declaring success', async () => {
+    await browser.open(origin + '/scroll')
+    const result = await browser.execute({ type: 'navigate', url: origin + '/redirect' }, await browser.observe())
+    expect(result.observation.url).toBe(origin + '/stable-action')
+    expect(result.verification).toBe('unverified')
+  })
+})
+
+
+describe('stable media identity', () => {
+  it('changes the video identity when a SPA replaces a player at the same index and URL', async () => {
+    replaceLabel = false
+    await browser.open(origin + '/replace-video')
+    const before = await browser.sampleVideos()
+    expect((await browser.sampleVideos())[0].id).toBe(before[0].id)
+    replaceLabel = true
+    try {
+      await vi.waitFor(async () => expect((await browser.sampleVideos())[0].id).not.toBe(before[0].id))
+    } finally { replaceLabel = false }
   })
 })

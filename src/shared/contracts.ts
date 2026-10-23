@@ -39,7 +39,7 @@ export interface Observation {
   fingerprint: string; frames: { id: string; url: string }[];
   videos: VideoSample[]; completion: CompletionEvidence
 }
-export interface ActionResult { changed: boolean; message: string; observation: Observation }
+export interface ActionResult { changed: boolean; verification?: 'verified' | 'unverified'; message: string; observation: Observation }
 export interface BrowserPort {
   open(url: string): Promise<void>;
   observe(): Promise<Observation>;
@@ -47,10 +47,11 @@ export interface BrowserPort {
   sampleVideos(): Promise<VideoSample[]>;
   close(): Promise<void>;
 }
-export interface ModelInput { goal: string; observation: Observation; history: string[]; signal: AbortSignal }
+export type ModelProgress = { stage: 'requesting' | 'reading' | 'retrying'; attempt: number }
+export interface ModelInput { goal: string; observation: Observation; history: string[]; signal: AbortSignal; onProgress?: (progress: ModelProgress) => void }
 export interface ModelProvider { decide(input: ModelInput): Promise<ModelDecision> }
 export const providerIdSchema = z.enum(['custom', 'deepseek', 'kimi', 'glm', 'openai', 'claude', 'gemini'])
-export const modelProtocolSchema = z.enum(['chat_completions', 'responses', 'anthropic'])
+export const modelProtocolSchema = z.enum(['chat_completions', 'responses', 'anthropic', 'gemini'])
 export const modelConfigSchema = z.object({
   provider: providerIdSchema.default('custom'),
   protocol: modelProtocolSchema.default('chat_completions'),
@@ -73,7 +74,8 @@ export interface PendingConfirmation {
   action?: BrowserAction; questions?: QuestionAnalysis[]
 }
 export interface AgentSnapshot {
-  phase: AgentPhase; taskId: string | null; step: number; modelCalls: number;
+  phase: AgentPhase; taskId: string | null; mode: 'task' | 'analysis'; step: number; modelCalls: number;
+  activeMs: number; activeSince: number | null; requestCount: number; retryCount: number; modelRequestStartedAt: number | null;
   startedAt: number | null; endedAt: number | null; message: string; observation: Observation | null;
   decision: ModelDecision | null; pending: PendingConfirmation | null; videos: VideoState[]
 }
@@ -88,6 +90,8 @@ export interface StudyAPI {
   subscribe(callback: (state: AppState) => void): () => void;
   addTask(input: TaskInput): Promise<AppState>;
   deleteTask(id: string): Promise<AppState>;
+  undoDeleteTask(): Promise<AppState>;
+  analyzePage(): Promise<AppState>;
   openBrowser(url: string): Promise<AppState>;
   closeBrowser(): Promise<AppState>;
   observe(): Promise<AppState>;
@@ -97,15 +101,16 @@ export interface StudyAPI {
   stop(): Promise<AppState>;
   confirm(id: string, approved: boolean): Promise<AppState>;
   saveModel(config: ModelConfig): Promise<AppState>;
-  setApiKey(): Promise<AppState>;
-  pasteApiKey(): Promise<AppState>;
-  clearApiKey(): Promise<AppState>;
-  testModel(): Promise<string>;
+  setApiKey(config?: ModelConfig): Promise<AppState>;
+  pasteApiKey(config?: ModelConfig): Promise<AppState>;
+  clearApiKey(config?: ModelConfig): Promise<AppState>;
+  testModel(config?: ModelConfig): Promise<string>;
   openDataFolder(): Promise<void>;
 }
 export const initialAgent: AgentSnapshot = {
-  phase: 'idle', taskId: null, step: 0, modelCalls: 0, startedAt: null, endedAt: null,
-  message: '准备就绪，打开浏览器并手动登录后开始任务。', observation: null, decision: null, pending: null, videos: [],
+  phase: 'idle', taskId: null, mode: 'task', step: 0, modelCalls: 0, startedAt: null, endedAt: null,
+  activeMs: 0, activeSince: null, requestCount: 0, retryCount: 0, modelRequestStartedAt: null,
+  message: '准备就绪，手动登录课程后可直接分析页面或开始任务。', observation: null, decision: null, pending: null, videos: [],
 }
 export const defaultModelConfig: ModelConfig = {
   provider: 'openai', protocol: 'responses', tokenParameter: 'max_completion_tokens',

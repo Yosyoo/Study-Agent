@@ -243,3 +243,48 @@ describe('OpenAICompatibleProvider transport', () => {
     expect(fetcher).toHaveBeenCalledTimes(1)
   })
 })
+
+
+describe('native Gemini and request reporting', () => {
+  const config: ModelConfig = { ...chatConfig, provider: 'gemini', protocol: 'gemini', baseUrl: 'https://generativelanguage.googleapis.com/v1beta', model: 'gemini-3.8-flash' }
+  const reply = (parts: unknown[], finishReason = 'STOP') => new Response(JSON.stringify({ candidates: [{ finishReason, content: { role: 'model', parts } }] }))
+  it('sends native inline images and a header key, preserving existing official credentials', async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => reply([{ text: 'ignore internal thought', thought: true }, { text: JSON.stringify(valid) }]))
+    const legacy = { ...config, protocol: 'chat_completions' as const, baseUrl: config.baseUrl + '/openai' }
+    expect(await new OpenAICompatibleProvider(legacy, 'gemini-private', { fetch: fetcher }).decide(input())).toEqual(valid)
+    const [url, init] = fetcher.mock.calls[0]
+    expect(url).toBe(config.baseUrl + '/models/gemini-3.8-flash:generateContent')
+    expect(init!.headers).toMatchObject({ 'x-goog-api-key': 'gemini-private' })
+    expect(init!.headers).not.toHaveProperty('Authorization')
+    const body = JSON.parse(init!.body as string)
+    expect(body.contents[0].parts[1]).toEqual({ inlineData: { mimeType: 'image/png', data: 'AAAA' } })
+    expect(body.generationConfig).toEqual({ maxOutputTokens: config.maxTokens, responseMimeType: 'application/json' })
+    expect(body.systemInstruction.parts[0].text).toBe(SYSTEM_PROMPT)
+    expect(init!.body).not.toContain('gemini-private')
+  })
+  it.each([
+    [[{ text: '{}' }], 'MAX_TOKENS', '被截断'],
+    [[{ text: '{}' }], 'SAFETY', '未正常完成'],
+    [[{ functionCall: { name: 'evil' } }, { text: JSON.stringify(valid) }], 'STOP', '未授权'],
+    [[{ text: JSON.stringify(valid), thought: true }], 'STOP', '没有有效文本'],
+  ])('rejects unsafe/incomplete Gemini envelopes', async (parts, finish, message) => {
+    const fetcher = vi.fn<typeof fetch>(async () => reply(parts as unknown[], finish as string))
+    await expect(new OpenAICompatibleProvider(config, 'key', { fetch: fetcher }).decide(input())).rejects.toThrow(message as string)
+    expect(fetcher).toHaveBeenCalledTimes(1)
+  })
+  it('reports every attempt, retry and response without leaking content', async () => {
+    const progress = vi.fn()
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response('', { status: 503 })).mockResolvedValueOnce(envelope())
+    await new OpenAICompatibleProvider(chatConfig, 'key', { fetch: fetcher, retryDelayMs: 0 }).decide({ ...input(), onProgress: progress })
+    expect(progress.mock.calls.map(([event]) => event)).toEqual([
+      { stage: 'requesting', attempt: 1 }, { stage: 'retrying', attempt: 1 },
+      { stage: 'requesting', attempt: 2 }, { stage: 'reading', attempt: 2 },
+    ])
+  })
+  it.each([[402, '计费'], [404, '模型名称'], [413, '截图'], [429, '配额']])('explains HTTP %s without echoing untrusted bodies', async (status, message) => {
+    const fetcher = vi.fn<typeof fetch>(async () => new Response('private key and screenshot', { status: status as number }))
+    const error = await new OpenAICompatibleProvider(chatConfig, 'key', { fetch: fetcher, maxRetries: 0 }).decide(input()).then(() => { throw new Error('Expected rejection') }, error => error as Error)
+    expect(error.message).toContain(message)
+    expect(error.message).not.toContain('private')
+  })
+})

@@ -210,15 +210,53 @@ describe('AgentHarness finite execution', () => {
     expect(harness.snapshot.message).toContain('轮数上限')
   })
 
-  it('runtime expiry disarms a pending approval', async () => {
-    const { harness, browser } = setup({ maxRuntimeMs: 100 })
+  it('excludes approval and pause time from the active budget, but bounds total wall time', async () => {
+    vi.useFakeTimers()
+    const { harness, browser } = setup({ maxRuntimeMs: 100, maxWallTimeMs: 1000 })
     await harness.start(task)
-    await waitPhase(harness, 'awaiting_confirmation')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(harness.snapshot.phase).toBe('awaiting_confirmation')
     const id = harness.snapshot.pending!.id
-    await waitPhase(harness, 'error')
+    await vi.advanceTimersByTimeAsync(400)
+    expect(harness.snapshot.phase).toBe('awaiting_confirmation')
+    expect(harness.snapshot.activeMs).toBe(0)
+    harness.pause()
+    await vi.advanceTimersByTimeAsync(400)
+    expect(harness.snapshot.phase).toBe('paused')
+    harness.resume()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(harness.snapshot.phase).toBe('awaiting_confirmation')
     await expect(harness.confirm(id, true)).rejects.toThrow('已失效')
+    await vi.advanceTimersByTimeAsync(201)
+    expect(harness.snapshot.phase).toBe('error')
+    expect(harness.snapshot.message).toContain('总时长')
     expect(browser.execute).not.toHaveBeenCalled()
   })
+
+  it('still expires and aborts actual active work', async () => {
+    vi.useFakeTimers()
+    const { harness, provider } = setup({ maxRuntimeMs: 100 })
+    provider.decide.mockImplementationOnce(() => new Promise(() => {}))
+    await harness.start(task)
+    await vi.advanceTimersByTimeAsync(0)
+    const signal = provider.decide.mock.calls[0][0].signal
+    await vi.advanceTimersByTimeAsync(101)
+    expect(harness.snapshot.phase).toBe('error')
+    expect(signal.aborted).toBe(true)
+    expect(harness.snapshot.activeMs).toBe(100)
+  })
+
+  it('stops after an unverified click instead of asking the model to repeat it', async () => {
+    const { harness, browser, provider } = setup()
+    vi.mocked(browser.execute).mockResolvedValue({ changed: false, verification: 'unverified', message: '结果待核对', observation: observation() })
+    await harness.start(task)
+    await waitPhase(harness, 'awaiting_confirmation')
+    await harness.confirm(harness.snapshot.pending!.id, true)
+    await waitPhase(harness, 'needs_user')
+    expect(provider.decide).toHaveBeenCalledTimes(1)
+    expect(browser.execute).toHaveBeenCalledTimes(1)
+  })
+
 })
 
 describe('AgentHarness deterministic video monitoring', () => {
@@ -270,5 +308,65 @@ describe('AgentHarness deterministic video monitoring', () => {
     expect(provider.decide).not.toHaveBeenCalled()
     expect(browser.execute).not.toHaveBeenCalled()
     expect(harness.snapshot.videos[0].status).toBe('stalled')
+  })
+})
+
+describe('read-only current-page analysis', () => {
+  it.each(['click', 'scroll', 'navigate'] as const)('never executes a proposed %s, even with high confidence', async type => {
+    const { harness, browser, provider } = setup()
+    const actions = { click: { type: 'click', x: 500, y: 200 }, scroll: { type: 'scroll', deltaY: 300 }, navigate: { type: 'navigate', url: task.url } } as const
+    provider.decide.mockResolvedValueOnce(decision({ action: actions[type] }))
+    await harness.start(task, 'analysis')
+    await waitPhase(harness, 'needs_user')
+    expect(harness.snapshot.taskId).toBeNull()
+    expect(browser.open).not.toHaveBeenCalled()
+    expect(browser.execute).not.toHaveBeenCalled()
+  })
+  it('analyzes the screenshot even with a video present and tracks requests separately from decisions', async () => {
+    const { harness, browser, provider } = setup()
+    vi.mocked(browser.observe).mockResolvedValue({ ...observation(), videos: [video()] })
+    provider.decide.mockImplementationOnce(async input => {
+      input.onProgress?.({ stage: 'requesting', attempt: 1 })
+      input.onProgress?.({ stage: 'retrying', attempt: 1 })
+      input.onProgress?.({ stage: 'requesting', attempt: 2 })
+      return decision({ questions: [{ type: 'single', stem: '1+1?', options: ['2'], suggestedAnswer: ['2'], explanation: '加法', confidence: 1, needsReview: true }] })
+    })
+    await harness.start(task, 'analysis')
+    await waitPhase(harness, 'awaiting_confirmation')
+    expect(harness.snapshot).toMatchObject({ taskId: null, requestCount: 2, retryCount: 1, modelCalls: 1 })
+    expect(harness.snapshot.pending?.kind).toBe('answers')
+    await harness.confirm(harness.snapshot.pending!.id, true)
+    expect(harness.snapshot.phase).toBe('completed')
+    expect(browser.execute).not.toHaveBeenCalled()
+  })
+})
+
+describe('platform completion grace period', () => {
+  it('waits for a delayed completion marker without invoking a model', async () => {
+    const { harness, browser, provider } = setup({ completionChecks: 3 })
+    const ended = { ...observation(), videos: [video({ ended: true, paused: true })] }
+    vi.mocked(browser.observe).mockResolvedValueOnce(ended).mockResolvedValueOnce(ended).mockResolvedValueOnce({ ...ended, completion: { state: 'complete', evidence: '已完成' } })
+    await harness.start(task)
+    await waitPhase(harness, 'completed')
+    expect(browser.observe).toHaveBeenCalledTimes(3)
+    expect(provider.decide).not.toHaveBeenCalled()
+  })
+  it('does not accept completion from a different course', async () => {
+    const { harness, browser } = setup()
+    const ended = { ...observation(), videos: [video({ ended: true, paused: true })] }
+    vi.mocked(browser.observe).mockResolvedValueOnce(ended).mockResolvedValueOnce({ ...ended, url: task.url + '/other', completion: { state: 'complete', evidence: '其他任务' } })
+    await harness.start(task)
+    await waitPhase(harness, 'needs_user')
+    expect(harness.snapshot.message).toContain('页面或播放器发生变化')
+  })
+  it('pause cancels the completion grace period before another observation', async () => {
+    const { harness, browser } = setup({ pollIntervalMs: 200 })
+    vi.mocked(browser.observe).mockResolvedValue({ ...observation(), videos: [video({ ended: true, paused: true })] })
+    await harness.start(task)
+    await vi.waitFor(() => expect(browser.observe).toHaveBeenCalledTimes(2))
+    harness.pause()
+    await new Promise(resolve => setTimeout(resolve, 250))
+    expect(browser.observe).toHaveBeenCalledTimes(2)
+    expect(harness.snapshot.phase).toBe('paused')
   })
 })

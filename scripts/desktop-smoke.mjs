@@ -69,7 +69,7 @@ try {
     ['GLM', 'glm', 'glm-5.3-flash', 'https://open.bigmodel.cn/api/paas/v4', 'chat_completions', 'max_tokens'],
     ['OpenAI', 'openai', 'gpt-6.1-sol', 'https://api.openai.com/v1', 'responses', 'max_completion_tokens'],
     ['Claude', 'claude', 'claude-sonnet-5-5', 'https://api.anthropic.com/v1', 'anthropic', 'max_tokens'],
-    ['Gemini', 'gemini', 'gemini-3.8-flash', 'https://generativelanguage.googleapis.com/v1beta/openai', 'chat_completions', 'max_tokens'],
+    ['Gemini', 'gemini', 'gemini-3.8-flash', 'https://generativelanguage.googleapis.com/v1beta', 'gemini', 'max_tokens'],
   ]
   for (const [label, provider, model, baseUrl, protocol, tokenParameter] of presets) {
     const before = (await page.evaluate(() => window.study.getState())).model
@@ -96,6 +96,7 @@ try {
   await eventually(async () => (await page.evaluate(() => window.study.getState())).model.model === 'vision-model-test', 'Model configuration was not saved through the UI')
   assert.equal(await page.getByText('Temperature', { exact: true }).count(), 0)
   assert.equal(await page.getByLabel('最大输出 Token', { exact: false }).isVisible(), false)
+  assert.equal(await page.getByLabel('接口协议', { exact: true }).count(), 0, 'Official presets must not expose wire protocols')
   await page.getByText('更多设置', { exact: true }).click()
   assert.equal(await page.getByLabel('最大输出 Token', { exact: false }).evaluate(element => element.checkValidity()), true)
   await page.getByText('更多设置', { exact: true }).click()
@@ -143,8 +144,11 @@ try {
   await desktop.evaluate(({ clipboard }, value) => { clipboard.readText = () => value }, secret)
   await page.getByLabel('API Base URL', { exact: false }).fill('https://vision.example/v1')
   await page.getByRole('button', { name: '粘贴 API Key', exact: true }).click()
-  await eventually(async () => (await page.evaluate(() => window.study.getState())).model.hasKey, 'Main-process paste did not import the key')
-  assert.equal((await page.evaluate(() => window.study.getState())).model.baseUrl, 'https://vision.example/v1')
+  await eventually(async () => (await page.evaluate(() => window.study.getState())).modelProfiles.some(profile => profile.baseUrl === 'https://vision.example/v1' && profile.hasKey), 'Main-process paste did not import the draft key')
+  assert.equal((await page.evaluate(() => window.study.getState())).model.baseUrl, 'https://api.openai.com/v1', 'Importing a draft key must not activate its endpoint')
+  const draftProfile = (await page.evaluate(() => window.study.getState())).modelProfiles.find(profile => profile.provider === 'openai')
+  assert.equal(draftProfile.baseUrl, 'https://vision.example/v1')
+  assert.equal(draftProfile.hasKey, true)
   assert.equal(JSON.stringify(await page.evaluate(() => window.study.getState())).includes(secret), false)
   await page.locator('.busy-indicator').waitFor({ state: 'hidden' })
   await page.evaluate(() => window.study.clearApiKey())
@@ -157,6 +161,10 @@ try {
   await page.getByRole('button', { name: '课程与任务', exact: true }).click()
   await page.getByRole('button', { name: '删除 桌面回归测试', exact: true }).click()
   await eventually(async () => (await page.evaluate(() => window.study.getState())).tasks.length === 0, 'Task was not deleted through the UI')
+  await page.getByRole('button', { name: '撤销删除', exact: true }).click()
+  await eventually(async () => (await page.evaluate(() => window.study.getState())).tasks.length === 1, 'Undo must restore the task')
+  await page.getByRole('button', { name: '删除 桌面回归测试', exact: true }).click()
+  await eventually(async () => (await page.evaluate(() => window.study.getState())).tasks.length === 0, 'Restored task must remain deletable')
   // Check the actual minimum supported desktop size, not just a full-size capture.
   await page.getByRole('button', { name: '模型与设置', exact: true }).click()
   await desktop.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1100, 720))

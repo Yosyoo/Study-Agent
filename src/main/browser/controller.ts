@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdir } from 'node:fs/promises'
 import { setTimeout as delay } from 'node:timers/promises'
-import { chromium, type BrowserContext, type Frame, type Page } from 'playwright'
+import { chromium, type BrowserContext, type Frame, type Page, type ElementHandle, type JSHandle } from 'playwright'
 import { actionSchema, type ActionResult, type BrowserAction, type BrowserPort, type CompletionEvidence, type Observation, type PageType, type VideoSample } from '../../shared/contracts'
 import { mapPoint, urlAllowed } from './policy'
 
@@ -13,6 +13,8 @@ export interface BrowserOptions {
   observationMaxAgeMs?: number
   onClose?: () => void
 }
+
+interface VideoRegistry { ids: WeakMap<HTMLVideoElement, { id: string; source: string; stream: HTMLVideoElement['srcObject'] }>; next: number; prefix: string }
 
 interface PageHints { password: boolean; exercise: boolean; chapterLinks: number; courseLinks: number; headingKind: string }
 
@@ -30,6 +32,7 @@ export class BrowserController implements BrowserPort {
   private context: BrowserContext | null = null
   private currentPage: Page | null = null
   private frameIds = new WeakMap<Frame, string>()
+  private videoRegistries = new WeakMap<Frame, JSHandle<VideoRegistry>>()
   private pending: Promise<unknown> = Promise.resolve()
   private lastObservation: Observation | null = null
   private navigationFailed = false
@@ -187,12 +190,24 @@ export class BrowserController implements BrowserPort {
 
   async sampleVideos(): Promise<VideoSample[]> { return this.serial(() => this.samples(this.page())) }
 
+  private async videoRegistry(frame: Frame): Promise<JSHandle<VideoRegistry>> {
+    let registry = this.videoRegistries.get(frame)
+    if (registry) {
+      try { await registry.evaluate(value => value.prefix); return registry }
+      catch { await registry.dispose().catch(() => undefined) }
+    }
+    registry = await frame.evaluateHandle(prefix => ({ ids: new WeakMap(), next: 0, prefix }), randomUUID())
+    this.videoRegistries.set(frame, registry)
+    return registry
+  }
+
   private async samples(page: Page): Promise<VideoSample[]> {
     const result: VideoSample[] = []
     for (const frame of page.frames()) {
       try {
         if (!await this.frameHasVisibleLayout(frame)) continue
-        const videos = await frame.evaluate(() => {
+        const registry = await this.videoRegistry(frame)
+        const videos = await frame.evaluate(registry => {
           const visible = (video: HTMLVideoElement): boolean => {
             const rect = video.getBoundingClientRect()
             if (rect.width <= 0 || rect.height <= 0) return false
@@ -202,17 +217,25 @@ export class BrowserController implements BrowserPort {
             }
             return true
           }
-          return Array.from(document.querySelectorAll('video')).map((video, index) => ({ video, index })).filter(({ video }) => visible(video)).map(({ video, index }) => ({
-          index, currentTime: Number.isFinite(video.currentTime) ? video.currentTime : 0,
-          duration: Number.isFinite(video.duration) && video.duration > 0 ? video.duration : null,
-          paused: video.paused, ended: video.ended, readyState: video.readyState,
-          networkState: video.networkState, playbackRate: video.playbackRate,
-          bufferedEnd: video.buffered.length ? video.buffered.end(video.buffered.length - 1) : 0,
-          error: video.error ? `MEDIA_ERR_${video.error.code}` : null,
-        }))
-        })
+          return Array.from(document.querySelectorAll('video')).filter(visible).map(video => {
+            const source = video.currentSrc || video.getAttribute('src') || ''
+            let identity = registry.ids.get(video)
+            if (!identity || identity.source !== source || identity.stream !== video.srcObject) {
+              identity = { id: `${registry.prefix}:${++registry.next}`, source, stream: video.srcObject }
+              registry.ids.set(video, identity)
+            }
+            return {
+              id: identity.id, currentTime: Number.isFinite(video.currentTime) ? video.currentTime : 0,
+              duration: Number.isFinite(video.duration) && video.duration > 0 ? video.duration : null,
+              paused: video.paused, ended: video.ended, readyState: video.readyState,
+              networkState: video.networkState, playbackRate: video.playbackRate,
+              bufferedEnd: video.buffered.length ? video.buffered.end(video.buffered.length - 1) : 0,
+              error: video.error ? `MEDIA_ERR_${video.error.code}` : null,
+            }
+          })
+        }, registry)
         const frameId = this.id(frame)
-        for (const { index, ...sample } of videos) result.push({ ...sample, id: `${frameId}:${index}`, frameId, sampledAt: Date.now() })
+        for (const sample of videos) result.push({ ...sample, frameId, sampledAt: Date.now() })
       } catch {
         if (!frame.isDetached()) throw new Error('无法读取播放器状态，可能正在导航。请重新观察。')
       }
@@ -373,7 +396,7 @@ export class BrowserController implements BrowserPort {
     }
   }
 
-  private async assertSafeClick(page: Page, point: { x: number; y: number }): Promise<void> {
+  private async assertSafeClick(page: Page, point: { x: number; y: number }): Promise<ElementHandle<Node>> {
     let frame = page.mainFrame()
     let local = point
     for (let depth = 0; depth < 10; depth++) {
@@ -392,7 +415,7 @@ export class BrowserController implements BrowserPort {
         return { forbidden, isFrame: node.tagName === 'IFRAME', x: rect.x, y: rect.y, borderX: html.clientLeft, borderY: html.clientTop, scaleX: rect.width / (html.offsetWidth || rect.width || 1), scaleY: rect.height / (html.offsetHeight || rect.height || 1) }
       })
       if (information.forbidden) { await hit.dispose(); throw new Error('检测到提交、支付、验证、文件选择或视频进度控件。此操作需要用户在浏览器中手动完成。') }
-      if (!information.isFrame) { await hit.dispose(); return }
+      if (!information.isFrame) return element
       const child = await element.contentFrame()
       await hit.dispose()
       if (!child) throw new Error('iframe 尚未加载，请重新观察。')
@@ -402,43 +425,116 @@ export class BrowserController implements BrowserPort {
     throw new Error('iframe 嵌套过深，请手动接管。')
   }
 
+  /** Retain node identities so inserted/removed elements cannot masquerade as scrolling. */
+  private async movementState(page: Page) {
+    return Promise.all(page.frames().map(frame => frame.evaluateHandle(() => ({
+      document, x: scrollX, y: scrollY, active: document.activeElement,
+      elements: Array.from(document.querySelectorAll('*'))
+        .filter(el => el.scrollHeight > el.clientHeight || el.scrollWidth > el.clientWidth).slice(0, 400)
+        .map(element => ({ element, x: element.scrollLeft, y: element.scrollTop })),
+    })).catch(() => null)))
+  }
+
+  private async controlState(target: ElementHandle<Node>): Promise<string | null> {
+    return target.evaluate(node => {
+      const element = node as Element
+      const control = element.closest('button,a,input,select,[role="button"],[role="tab"],[role="checkbox"]')
+      if (!control || !control.isConnected) return null
+      // Focus alone is not proof that a click succeeded. Ignore unrelated animation.
+      return JSON.stringify([control.textContent?.slice(0, 300), control.getAttribute('aria-expanded'), control.getAttribute('aria-selected'), control.getAttribute('aria-checked'),
+        control.hasAttribute('disabled'), control.matches('input[type="checkbox"],input[type="radio"]') ? (control as HTMLInputElement).checked : null])
+    }).catch(() => null)
+  }
+
+  private async focusedInput(page: Page): Promise<ElementHandle<Node> | null> {
+    for (const frame of page.frames()) {
+      const target = await frame.evaluateHandle(() => document.hasFocus() && document.activeElement?.matches('input,textarea') ? document.activeElement : null)
+      const element = target.asElement()
+      if (element) return element
+      await target.dispose()
+    }
+    return null
+  }
+
   async execute(untrustedAction: BrowserAction, basedOn: Observation, signal?: AbortSignal): Promise<ActionResult> {
     return this.serial(async () => {
       signal?.throwIfAborted()
       const action = actionSchema.parse(untrustedAction)
       const page = await this.guard(basedOn)
       signal?.throwIfAborted()
-      // Each mutation is dispatched exactly once. Failures require a fresh observation.
-      if (action.type === 'click') {
-        const point = mapPoint(action.x, action.y, basedOn.viewport)
-        await this.assertSafeClick(page, point)
-        if (await this.fingerprint(page) !== basedOn.fingerprint) throw new Error('操作前页面再次变化，请重新观察。')
+      let target: ElementHandle<Node> | null = null
+      let targetBefore: string | null = null
+      let expectedInput: string | null = null
+      let expectedUrl: string | null = null
+      const movement = action.type === 'scroll' || action.type === 'press' ? await this.movementState(page) : []
+      try {
+        // Each mutation is dispatched exactly once. Failures require a fresh observation.
+        if (action.type === 'click') {
+          const point = mapPoint(action.x, action.y, basedOn.viewport)
+          target = await this.assertSafeClick(page, point)
+          targetBefore = await this.controlState(target)
+          expectedUrl = await target.evaluate(node => (node as Element).closest('a[href]')?.getAttribute('href') ?? null)
+          if (expectedUrl) expectedUrl = new URL(expectedUrl, await target.evaluate(() => location.href)).href
+          if (await this.fingerprint(page) !== basedOn.fingerprint) throw new Error('操作前页面再次变化，请重新观察。')
+          signal?.throwIfAborted()
+          await page.mouse.click(point.x, point.y)
+        } else if (action.type === 'type') {
+          await this.assertEditable(page, true)
+          target = await this.focusedInput(page)
+          if (target) expectedInput = await target.evaluate((node, text) => {
+            const input = node as HTMLInputElement
+            return input.selectionStart === null || input.selectionEnd === null ? null : input.value.slice(0, input.selectionStart) + text + input.value.slice(input.selectionEnd)
+          }, action.text)
+          signal?.throwIfAborted()
+          await page.keyboard.insertText(action.text)
+        } else if (action.type === 'press') {
+          await this.assertEditable(page, false)
+          await this.assertSafePress(page, action.key)
+          signal?.throwIfAborted()
+          await page.keyboard.press(action.key)
+        } else if (action.type === 'scroll') {
+          await page.mouse.move(basedOn.viewport.width / 2, basedOn.viewport.height / 2)
+          signal?.throwIfAborted()
+          await page.mouse.wheel(0, action.deltaY)
+        } else if (action.type === 'navigate') {
+          expectedUrl = new URL(action.url).href
+          await this.navigate(action.url, signal)
+        } else {
+          await delay(action.ms, undefined, { signal })
+        }
         signal?.throwIfAborted()
-        await page.mouse.click(point.x, point.y)
-      } else if (action.type === 'type') {
-        await this.assertEditable(page, true)
+        await delay(350, undefined, { signal })
         signal?.throwIfAborted()
-        await page.keyboard.insertText(action.text)
-      } else if (action.type === 'press') {
-        await this.assertEditable(page, false)
-        await this.assertSafePress(page, action.key)
-        signal?.throwIfAborted()
-        await page.keyboard.press(action.key)
-      } else if (action.type === 'scroll') {
-        await page.mouse.move(basedOn.viewport.width / 2, basedOn.viewport.height / 2)
-        signal?.throwIfAborted()
-        await page.mouse.wheel(0, action.deltaY)
-      } else if (action.type === 'navigate') {
-        await this.navigate(action.url, signal)
-      } else {
-        await delay(action.ms, undefined, { signal })
+        const observation = await this.capture()
+        let changed = false
+        let message = '操作已发出，尚无足够证据确认结果；请核对当前页面。'
+        if (action.type === 'navigate' || action.type === 'click') {
+          if (expectedUrl && observation.url === expectedUrl && observation.url !== basedOn.url) {
+            changed = true; message = '已到达目标链接页面；不代表平台任务点完成。'
+          } else if (action.type === 'click' && observation.url === basedOn.url && target && targetBefore !== null) {
+            const after = await this.controlState(target)
+            changed = after !== null && after !== targetBefore
+            if (changed) message = '被点击控件的状态已变化；不代表平台已提交或任务已完成。'
+          }
+        } else if (action.type === 'type' && target && expectedInput !== null) {
+          changed = await target.evaluate((node, expected) => node.isConnected && (node as HTMLInputElement).value === expected, expectedInput).catch(() => false)
+          if (changed) message = '已验证目标输入框中的文本变化。'
+        } else if (action.type === 'scroll' || action.type === 'press') {
+          changed = (await Promise.all(movement.map(handle => handle?.evaluate((before, key) => before.document === document && (
+            before.x !== scrollX || before.y !== scrollY ||
+            before.elements.some(({ element, x, y }) => element.isConnected && (element.scrollLeft !== x || element.scrollTop !== y)) ||
+            (key === 'Tab' && document.hasFocus() && before.active !== document.activeElement)
+          ), action.type === 'press' ? action.key : null).catch(() => false) ?? false))).some(Boolean)
+          if (changed) message = action.type === 'press' && action.key === 'Tab' ? '已验证焦点或滚动位置变化。' : '已验证页面或框架的滚动位置变化。'
+        } else if (action.type === 'wait') {
+          changed = observation.fingerprint !== basedOn.fingerprint
+          message = changed ? '等待后检测到页面结构变化，将重新观察。' : '等待后未检测到页面结构变化。'
+        }
+        return { changed, verification: changed ? 'verified' : 'unverified', observation, message }
+      } finally {
+        await target?.dispose().catch(() => undefined)
+        await Promise.all(movement.map(handle => handle?.dispose().catch(() => undefined)))
       }
-      signal?.throwIfAborted()
-      await delay(350, undefined, { signal })
-      signal?.throwIfAborted()
-      const observation = await this.capture()
-      const changed = observation.fingerprint !== basedOn.fingerprint || observation.screenshot !== basedOn.screenshot
-      return { changed, observation, message: changed ? '操作后已重新截图，观察到页面变化；不代表平台已提交或任务已完成。' : '操作后未观察到可确认的页面变化，需要重新判断。' }
     })
   }
 }

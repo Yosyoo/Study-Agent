@@ -31,7 +31,7 @@ describe('official multimodal provider presets', () => {
     expect(getProviderPreset('claude')?.jsonMode).toBe(false)
     expect(getProviderPreset('kimi')?.tokenParameter).toBe('max_completion_tokens')
     expect(getProviderPreset('deepseek')?.tokenParameter).toBe('max_tokens')
-    expect(getProviderPreset('gemini')?.baseUrl).toBe('https://generativelanguage.googleapis.com/v1beta/openai')
+    expect(getProviderPreset('gemini')?.baseUrl).toBe('https://generativelanguage.googleapis.com/v1beta')
   })
 
   it('preserves user limits and does not mutate a custom saved configuration', () => {

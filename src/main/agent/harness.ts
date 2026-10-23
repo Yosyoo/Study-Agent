@@ -7,7 +7,7 @@ import { VideoTracker } from '../browser/video-monitor'
 import { redact } from '../security'
 
 export interface HarnessLimits {
-  maxSteps: number; maxModelCalls: number; maxRuntimeMs: number; pollIntervalMs: number
+  maxSteps: number; maxModelCalls: number; maxRuntimeMs: number; maxWallTimeMs: number; pollIntervalMs: number; completionChecks: number
 }
 export interface HarnessOptions {
   browser: BrowserPort; provider: ModelProvider; onUpdate: (state: AgentSnapshot) => void;
@@ -15,7 +15,8 @@ export interface HarnessOptions {
   limits?: Partial<HarnessLimits>
 }
 
-const DEFAULT_LIMITS: HarnessLimits = { maxSteps: 30, maxModelCalls: 12, maxRuntimeMs: 2 * 60 * 60 * 1000, pollIntervalMs: 2000 }
+const DEFAULT_LIMITS: HarnessLimits = { maxSteps: 30, maxModelCalls: 12, maxRuntimeMs: 2 * 60 * 60 * 1000, pollIntervalMs: 2000, maxWallTimeMs: 24 * 60 * 60 * 1000, completionChecks: 6 }
+const RUNNING = new Set<AgentPhase>(['observing', 'thinking', 'executing', 'verifying', 'monitoring'])
 const TERMINAL = new Set<AgentPhase>(['idle', 'completed', 'stopped', 'error'])
 const SAFE_AUTOMATIC = new Set<BrowserAction['type']>(['wait', 'scroll'])
 
@@ -29,6 +30,7 @@ export class AgentHarness {
   private driveRequested = false
   private controller: AbortController | null = null
   private runtimeTimer: ReturnType<typeof setTimeout> | null = null
+  private wallTimer: ReturnType<typeof setTimeout> | null = null
   private history: string[] = []
   private approved: { action: BrowserAction; observation: Observation } | null = null
   private repeats = new Map<string, number>()
@@ -43,18 +45,19 @@ export class AgentHarness {
   get snapshot(): AgentSnapshot { return structuredClone(this.state) }
 
   /** Starts background work and returns immediately so IPC remains responsive. */
-  async start(task: StudyTask): Promise<void> {
+  async start(task: StudyTask, mode: 'task' | 'analysis' = 'task'): Promise<void> {
     if (!TERMINAL.has(this.state.phase)) throw new Error('已有任务正在执行或等待接管，请先停止当前任务。')
     this.invalidate()
+    this.clearRuntimeTimer()
     this.task = structuredClone(task)
     this.history = []
     this.repeats.clear()
     this.noProgress = 0
     this.videoTracker.reset()
-    this.state = { ...structuredClone(initialAgent), taskId: task.id, startedAt: Date.now(), phase: 'observing', message: '正在观察当前浏览器页面…' }
-    this.runtimeTimer = setTimeout(() => this.failBudget('任务已达到运行时间上限，请检查进度后重新开始。'), this.limits.maxRuntimeMs)
-    this.runtimeTimer.unref?.()
-    this.emit()
+    this.state = { ...structuredClone(initialAgent), mode, taskId: mode === 'analysis' ? null : task.id, startedAt: Date.now() }
+    this.wallTimer = setTimeout(() => this.failBudget('任务已保留超过总时长上限，请重新开始。'), this.limits.maxWallTimeMs)
+    this.wallTimer.unref?.()
+    this.patch({ phase: 'observing', message: mode === 'analysis' ? '正在截取当前页面，仅分析图片，不操作浏览器…' : '正在观察当前浏览器页面…' })
     this.log('info', `开始任务：${task.name}`)
     this.requestDrive()
   }
@@ -147,10 +150,14 @@ export class AgentHarness {
       if (!this.current(generation) || !this.withinBudget()) return
       this.patch({ observation, videos: this.videoTracker.update(observation.videos), decision: null })
       if (observation.pageType === 'login') { this.intervene('页面需要登录或平台验证。请在浏览器中手动完成后恢复。'); return }
-      if (observation.videos.length > 0 && observation.pageType !== 'exercise') { await this.monitor(observation, generation, signal); return }
+      if (this.state.mode !== 'analysis' && observation.videos.length > 0 && observation.pageType !== 'exercise') { await this.monitor(observation, generation, signal); return }
       if (this.state.modelCalls >= this.limits.maxModelCalls) { this.failBudget('已达到模型调用轮数上限，请人工核对进度。'); return }
       this.patch({ phase: 'thinking', modelCalls: this.state.modelCalls + 1, message: '模型正在直接阅读截图并生成受控建议…' })
-      const rawDecision = await this.options.provider.decide({ goal: this.task!.goal, observation, history: [...this.history], signal })
+      const rawDecision = await this.options.provider.decide({ goal: this.task!.goal, observation, history: [...this.history], signal, onProgress: progress => {
+        if (!this.current(generation)) return
+        if (progress.stage === 'requesting') this.patch({ requestCount: this.state.requestCount + 1, retryCount: this.state.retryCount + (progress.attempt > 1 ? 1 : 0), modelRequestStartedAt: Date.now(), message: progress.attempt > 1 ? `正在重试模型请求（第 ${progress.attempt} 次）…` : '截图已准备，正在请求模型分析…' })
+        else this.patch({ message: progress.stage === 'reading' ? '服务已响应，正在接收并校验分析结果…' : '服务暂时不可用，稍后自动重试；可以随时停止。' })
+      } })
       if (!this.current(generation) || !this.withinBudget()) return
       // Providers are replaceable; validate again at the execution boundary.
       const parsed = decisionSchema.safeParse(rawDecision)
@@ -164,6 +171,10 @@ export class AgentHarness {
           questions: decision.questions, observationId: observation.id,
         } })
         this.log('info', `截图识别到 ${decision.questions.length} 道题目，等待用户核对。`)
+        return
+      }
+      if (this.state.mode === 'analysis') {
+        this.intervene(`当前截图没有可供核对的题目分析：${decision.summary} 请手动调整页面后重新分析；本模式不会执行浏览器操作。`)
         return
       }
       if (decision.needsHuman || decision.confidence < 0.75 || decision.pageType === 'unknown' || decision.pageType === 'login') {
@@ -208,6 +219,10 @@ export class AgentHarness {
     this.patch({ phase: 'verifying', observation: result.observation, videos: this.videoTracker.update(result.observation.videos), message: result.message })
     this.remember(`操作 ${action.type}：${result.message}`)
     this.log(result.changed ? 'info' : 'warn', `操作验证：${result.message}`)
+    if (result.verification === 'unverified' && !SAFE_AUTOMATIC.has(action.type)) {
+      this.intervene(`操作已发出，但结果仍待核对：${result.message} 请检查浏览器后恢复，不会自动重复操作。`)
+      return false
+    }
     this.noProgress = result.changed ? 0 : this.noProgress + 1
     if (this.noProgress >= 2) { this.intervene('连续两次操作没有可验证的页面变化，已停止重试。'); return false }
     return true
@@ -229,11 +244,22 @@ export class AgentHarness {
           this.intervene('检测到视频播放卡顿或媒体/网络异常，请在浏览器中检查后恢复。'); return
         }
         if (videos.every(v => v.status === 'ended')) {
-          const observation = await this.options.browser.observe()
-          if (!this.current(generation) || !this.withinBudget()) return
-          this.patch({ observation })
-          if (observation.completion.state === 'complete') this.complete(`视频已结束，当前页面显示任务点完成：${observation.completion.evidence}`)
-          else this.intervene(`视频已结束，但尚未确认平台任务点完成。${observation.completion.evidence} 请核对页面后恢复。`)
+          const ids = new Set(samples.map(v => v.id))
+          this.patch({ message: '视频已播放结束，正在等待平台确认任务点状态…' })
+          for (let check = 0; check < this.limits.completionChecks; check++) {
+            if (check > 0) await this.waitForPoll(signal)
+            if (!this.current(generation) || !this.withinBudget()) return
+            const observation = await this.options.browser.observe()
+            if (!this.current(generation) || !this.withinBudget()) return
+            this.patch({ observation })
+            if (observation.url !== initial.url || observation.videos.length !== ids.size || observation.videos.some(v => !ids.has(v.id))) {
+              this.intervene('等待确认期间课程页面或播放器发生变化，请核对当前任务后恢复。'); return
+            }
+            if (observation.completion.state === 'complete') {
+              this.complete(`视频已结束，当前页面显示任务点完成：${observation.completion.evidence}`); return
+            }
+          }
+          this.intervene(`视频已结束，但尚未确认平台任务点完成。${this.state.observation?.completion.evidence ?? ''} 请核对页面后恢复。`)
           return
         }
         if (videos.every(v => v.status === 'paused' || v.status === 'ended')) {
@@ -258,16 +284,36 @@ export class AgentHarness {
 
   private invalidate(): void { this.generation++; this.controller?.abort(); this.approved = null; this.driveRequested = false }
   private current(generation: number): boolean { return this.generation === generation }
-  private patch(patch: Partial<AgentSnapshot>): void { this.state = { ...this.state, ...patch }; this.emit() }
+  private patch(patch: Partial<AgentSnapshot>): void {
+    const nextPhase = patch.phase ?? this.state.phase
+    if (nextPhase !== this.state.phase) {
+      if (this.state.activeSince !== null) this.state.activeMs += Math.max(0, Date.now() - this.state.activeSince)
+      this.state.activeSince = RUNNING.has(nextPhase) ? Date.now() : null
+      if (this.runtimeTimer) clearTimeout(this.runtimeTimer)
+      this.runtimeTimer = null
+      if (this.state.activeSince !== null) {
+        this.runtimeTimer = setTimeout(() => this.failBudget('任务已达到实际运行时间上限，请检查进度后重新开始。'), Math.max(1, this.limits.maxRuntimeMs - this.state.activeMs))
+        this.runtimeTimer.unref?.()
+      }
+      if (nextPhase !== 'thinking') patch.modelRequestStartedAt = null
+    }
+    this.state = { ...this.state, ...patch }; this.emit()
+  }
   private emit(): void { this.options.onUpdate(this.snapshot) }
   private log(level: 'info' | 'warn' | 'error', message: string): void { this.options.log(level, message) }
   private remember(message: string): void { this.history.push(message.slice(0, 1000)); this.history = this.history.slice(-8) }
   private intervene(message: string): void { this.patch({ phase: 'needs_user', pending: null, message }); this.log('warn', message) }
   private complete(message: string): void { this.clearRuntimeTimer(); this.patch({ phase: 'completed', endedAt: Date.now(), pending: null, message }); this.log('info', message) }
-  private clearRuntimeTimer(): void { if (this.runtimeTimer) clearTimeout(this.runtimeTimer); this.runtimeTimer = null }
+  private clearRuntimeTimer(): void {
+    if (this.runtimeTimer) clearTimeout(this.runtimeTimer)
+    if (this.wallTimer) clearTimeout(this.wallTimer)
+    this.runtimeTimer = null; this.wallTimer = null
+  }
   private failBudget(message: string): void { this.invalidate(); this.clearRuntimeTimer(); this.patch({ phase: 'error', endedAt: Date.now(), pending: null, message }); this.log('warn', message) }
   private withinBudget(): boolean {
-    if (this.state.startedAt !== null && Date.now() - this.state.startedAt >= this.limits.maxRuntimeMs) { this.failBudget('任务已达到运行时间上限，请检查进度后重新开始。'); return false }
+    if (this.state.startedAt !== null && Date.now() - this.state.startedAt >= this.limits.maxWallTimeMs) { this.failBudget('任务已保留超过总时长上限，请重新开始。'); return false }
+    const runningMs = this.state.activeMs + (this.state.activeSince === null ? 0 : Math.max(0, Date.now() - this.state.activeSince))
+    if (runningMs >= this.limits.maxRuntimeMs) { this.failBudget('任务已达到实际运行时间上限，请检查进度后重新开始。'); return false }
     return true
   }
 }
